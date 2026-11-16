@@ -1,0 +1,6 @@
+{
+  "name": "Rats! Tactical Maze",
+  "description": "Remake moderno in 3D WebGL del classico puzzle strategico Rats! (1994). Contieni l'infestazione nei labirinti con bombe, gas, veleni e barriere.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

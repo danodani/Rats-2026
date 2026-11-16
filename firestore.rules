@@ -1,0 +1,283 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidHexOrEmpty(val) {
+      return val is string && val.size() <= 7 && (val == '' || val.matches('^#[0-9a-fA-F]{6}$'));
+    }
+
+    function isValidBiome(b) {
+      return b is string && b.size() <= 12 && b in ['grass', 'sand', 'city', 'ice', 'lava', 'moon'];
+    }
+
+    function isValidDifficulty(d) {
+      return d is string && d.size() <= 10 && d in ['easy', 'normal', 'hard'];
+    }
+
+    function isValidCommunityLevel(data) {
+      return data.title is string
+        && data.title.size() >= 2
+        && data.title.size() <= 40
+        && data.description is string
+        && data.description.size() <= 140
+        && data.authorId is string
+        && data.authorId.size() >= 1
+        && data.authorId.size() <= 128
+        && data.authorId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.authorName is string
+        && data.authorName.size() >= 1
+        && data.authorName.size() <= 24
+        && isValidBiome(data.biome)
+        && isValidHexOrEmpty(data.customWallColor)
+        && isValidHexOrEmpty(data.customFloorColor)
+        && isValidDifficulty(data.difficulty)
+        && data.criticalLimit is int
+        && data.criticalLimit >= 30
+        && data.criticalLimit <= 250
+        && data.ratSpeed is number
+        && data.ratSpeed >= 1.5
+        && data.ratSpeed <= 4.5
+        && data.breedCooldown is number
+        && data.breedCooldown >= 2.5
+        && data.breedCooldown <= 8.0
+        && data.layout is list
+        && data.layout.size() >= 9
+        && data.layout.size() <= 100
+        && data.layout[0] is string
+        && data.layout[0].size() >= 11
+        && data.layout[0].size() <= 100
+        && data.layout[data.layout.size() - 1] is string
+        && data.layout[data.layout.size() - 1].size() >= 11
+        && data.layout[data.layout.size() - 1].size() <= 100
+        && data.tunnels is list
+        && data.tunnels.size() <= 4
+        && (data.tunnels.size() == 0 || data.tunnels[0] is map)
+        && data.initialRats is list
+        && data.initialRats.size() >= 2
+        && data.initialRats.size() <= 50
+        && data.initialRats[0] is map
+        && data.isPublished is bool
+        && data.bestTimeMs is int
+        && data.bestTimeMs >= 0
+        && data.bestTimeMs <= 36000000
+        && data.bestPlayerName is string
+        && data.bestPlayerName.size() <= 24
+        && data.playCount is int
+        && data.playCount >= 0
+        && data.playCount <= 10000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasExactLevelKeys(data) {
+      let allowed = [
+        'title',
+        'description',
+        'authorId',
+        'authorName',
+        'biome',
+        'customWallColor',
+        'customFloorColor',
+        'difficulty',
+        'criticalLimit',
+        'ratSpeed',
+        'breedCooldown',
+        'layout',
+        'tunnels',
+        'initialRats',
+        'isPublished',
+        'bestTimeMs',
+        'bestPlayerName',
+        'playCount',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(allowed) && data.keys().hasOnly(allowed);
+    }
+
+    function isValidLevelRun(data) {
+      return data.levelId is string
+        && data.levelId.size() >= 1
+        && data.levelId.size() <= 128
+        && data.levelId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.runnerId is string
+        && data.runnerId == request.auth.uid
+        && data.runnerId.size() <= 128
+        && data.runnerId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.playerName is string
+        && data.playerName.size() >= 1
+        && data.playerName.size() <= 24
+        && data.timeMs is int
+        && data.timeMs >= 1000
+        && data.timeMs <= 36000000
+        && data.eliminatedCount is int
+        && data.eliminatedCount >= 0
+        && data.eliminatedCount <= 10000
+        && data.bornCount is int
+        && data.bornCount >= 0
+        && data.bornCount <= 10000
+        && data.isPublic is bool
+        && data.isPublic == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasExactRunKeys(data) {
+      let allowed = [
+        'levelId',
+        'runnerId',
+        'playerName',
+        'timeMs',
+        'eliminatedCount',
+        'bornCount',
+        'isPublic',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(allowed) && data.keys().hasOnly(allowed);
+    }
+
+    match /community_levels/{levelId} {
+      allow get: if isValidId(levelId)
+        && (existing().isPublished == true || (isSignedIn() && existing().authorId == request.auth.uid));
+
+      allow list: if existing().isPublished == true
+        || (isSignedIn() && existing().authorId == request.auth.uid);
+
+      allow create: if isVerifiedUser()
+        && isValidId(levelId)
+        && isValidCommunityLevel(incoming())
+        && hasExactLevelKeys(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().bestTimeMs == 0
+        && incoming().bestPlayerName == ''
+        && incoming().playCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(levelId)
+        && isValidCommunityLevel(incoming())
+        && incoming().authorId == existing().authorId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            existing().authorId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title',
+              'description',
+              'biome',
+              'customWallColor',
+              'customFloorColor',
+              'difficulty',
+              'criticalLimit',
+              'ratSpeed',
+              'breedCooldown',
+              'layout',
+              'tunnels',
+              'initialRats',
+              'isPublished',
+              'updatedAt'
+            ])
+          )
+          || (
+            existing().isPublished == true
+            && incoming().isPublished == true
+            && incoming().playCount == existing().playCount + 1
+            && (
+              (incoming().bestTimeMs == existing().bestTimeMs && incoming().bestPlayerName == existing().bestPlayerName)
+              || (
+                (existing().bestTimeMs == 0 || incoming().bestTimeMs < existing().bestTimeMs)
+                && incoming().bestTimeMs >= 1000
+                && incoming().bestPlayerName.size() >= 1
+              )
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'playCount',
+              'bestTimeMs',
+              'bestPlayerName',
+              'updatedAt'
+            ])
+            && existsAfter(/databases/$(database)/documents/community_levels/$(levelId)/runs/$(request.auth.uid))
+            && getAfter(/databases/$(database)/documents/community_levels/$(levelId)/runs/$(request.auth.uid)).data.runnerId == request.auth.uid
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(levelId)
+        && existing().authorId == request.auth.uid;
+
+      match /runs/{runnerId} {
+        allow get: if isValidId(levelId)
+          && isValidId(runnerId)
+          && existing().isPublic == true;
+
+        allow list: if existing().isPublic == true;
+
+        allow create: if isVerifiedUser()
+          && isValidId(levelId)
+          && isValidId(runnerId)
+          && runnerId == request.auth.uid
+          && isValidLevelRun(incoming())
+          && hasExactRunKeys(incoming())
+          && incoming().levelId == levelId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/community_levels/$(levelId))
+          && get(/databases/$(database)/documents/community_levels/$(levelId)).data.isPublished == true;
+
+        allow update: if isVerifiedUser()
+          && isValidId(levelId)
+          && isValidId(runnerId)
+          && runnerId == request.auth.uid
+          && existing().runnerId == request.auth.uid
+          && isValidLevelRun(incoming())
+          && incoming().levelId == existing().levelId
+          && incoming().runnerId == existing().runnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().timeMs <= existing().timeMs
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'playerName',
+            'timeMs',
+            'eliminatedCount',
+            'bornCount',
+            'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/community_levels/$(levelId))
+          && get(/databases/$(database)/documents/community_levels/$(levelId)).data.isPublished == true;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(levelId)
+          && isValidId(runnerId)
+          && existing().runnerId == request.auth.uid;
+      }
+    }
+  }
+}

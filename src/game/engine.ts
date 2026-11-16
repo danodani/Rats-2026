@@ -251,6 +251,9 @@ export class RatsGameEngine {
   private canPan = false;
   private mobileFitMode = false;
   private camDist = 18;
+  private fitCamDist = 18;
+  private comfortCamDist = 18;
+  private zoomFactor = 1;
   private readonly tiltRad = THREE.MathUtils.degToRad(14);
   private snapshotTimer = 0;
 
@@ -311,17 +314,17 @@ export class RatsGameEngine {
 
     const w = Math.max(1, this.container.clientWidth);
     const h = Math.max(1, this.container.clientHeight);
-    this.camera = new THREE.PerspectiveCamera(40, w / h, 0.5, 220);
+    this.camera = new THREE.PerspectiveCamera(40, w / h, 0.5, 480);
 
     this.hemiLight = new THREE.HemisphereLight(0x9be2ff, 0x2a5e28, 0.85);
     this.scene.add(this.hemiLight);
 
     this.keyLight = new THREE.DirectionalLight(0xfff8e7, 1.85);
-    this.keyLight.position.set(10, 24, 10);
+    this.keyLight.position.set(14, 34, 14);
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.set(1024, 1024);
     this.keyLight.shadow.camera.near = 2;
-    this.keyLight.shadow.camera.far = 65;
+    this.keyLight.shadow.camera.far = 200;
     this.keyLight.shadow.bias = -0.0005;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight);
@@ -405,6 +408,7 @@ export class RatsGameEngine {
     dom.addEventListener('pointerup', this.onPointerUp);
     dom.addEventListener('pointercancel', this.onPointerCancel);
     dom.addEventListener('pointerleave', this.onPointerLeave);
+    dom.addEventListener('wheel', this.onWheel, { passive: false });
     dom.addEventListener('webglcontextlost', this.onContextLost);
     window.addEventListener('resize', this.handleResize);
     if (typeof ResizeObserver !== 'undefined') {
@@ -420,6 +424,7 @@ export class RatsGameEngine {
     dom.removeEventListener('pointerup', this.onPointerUp);
     dom.removeEventListener('pointercancel', this.onPointerCancel);
     dom.removeEventListener('pointerleave', this.onPointerLeave);
+    dom.removeEventListener('wheel', this.onWheel);
     dom.removeEventListener('webglcontextlost', this.onContextLost);
     window.removeEventListener('resize', this.handleResize);
     this.resizeObserver?.disconnect();
@@ -466,16 +471,22 @@ export class RatsGameEngine {
     const distH = (boardH * 0.5) / Math.tan(vFov / 2);
     const distW = (boardW * 0.5) / Math.tan(hFov / 2);
     const fitDist = Math.max(distH, distW);
+    this.fitCamDist = fitDist;
 
-    // On mobile screens with wide/large maps, zoom to comfortable touch scale (~28px/cell) and enable swipe pan
+    // On mobile OR large desktop maps (e.g. 50x50..100x100), zoom to comfortable cell size and allow drag-panning
     const isCompactViewport = w < 768 || aspect < 0.95;
-    const minCellPx = 28;
+    const minCellPx = isCompactViewport ? 28 : 22;
     const comfortVisCols = w / minCellPx;
-    const comfortDist = (comfortVisCols * 0.5) / Math.tan(hFov / 2);
-    const needsMobilePan = isCompactViewport && fitDist > comfortDist * 1.08;
+    const comfortVisRows = h / minCellPx;
+    const comfortDistW = (comfortVisCols * 0.5) / Math.tan(hFov / 2);
+    const comfortDistH = (comfortVisRows * 0.5) / Math.tan(vFov / 2);
+    const comfortDist = Math.min(comfortDistW, comfortDistH);
+    this.comfortCamDist = comfortDist;
 
-    if (needsMobilePan && !this.mobileFitMode) {
-      this.camDist = comfortDist;
+    const needsPan = fitDist > comfortDist * 1.08;
+
+    if (needsPan && !this.mobileFitMode) {
+      this.camDist = Math.min(fitDist, Math.max(10, comfortDist * this.zoomFactor));
     } else {
       this.camDist = fitDist;
     }
@@ -484,7 +495,7 @@ export class RatsGameEngine {
     const visH = (2 * this.camDist * Math.tan(vFov / 2)) / Math.cos(this.tiltRad);
     this.panMaxX = Math.max(0, (boardW - visW) * 0.5);
     this.panMaxZ = Math.max(0, (boardH - visH) * 0.5);
-    this.canPan = needsMobilePan;
+    this.canPan = needsPan;
 
     if (!this.canPan || this.mobileFitMode) {
       this.panX = 0;
@@ -496,9 +507,31 @@ export class RatsGameEngine {
 
   public toggleMobileFitMode(): void {
     this.mobileFitMode = !this.mobileFitMode;
+    if (!this.mobileFitMode) {
+      this.zoomFactor = 1;
+    }
     this.fitCamera();
     this.emitSnapshot();
   }
+
+  private onWheel = (e: WheelEvent) => {
+    if (!this.canPan || this.disposed) return;
+    e.preventDefault();
+    const step = e.deltaY > 0 ? 1.12 : 0.89;
+    if (this.mobileFitMode && e.deltaY < 0) {
+      this.mobileFitMode = false;
+      this.zoomFactor = Math.max(0.65, (this.fitCamDist / Math.max(1, this.comfortCamDist)) * 0.88);
+    } else {
+      this.zoomFactor = Math.max(0.65, Math.min(this.fitCamDist / Math.max(1, this.comfortCamDist), this.zoomFactor * step));
+      if (this.comfortCamDist * this.zoomFactor >= this.fitCamDist * 0.96) {
+        this.mobileFitMode = true;
+      } else {
+        this.mobileFitMode = false;
+      }
+    }
+    this.fitCamera();
+    this.emitSnapshot();
+  };
 
   private gridToWorld(col: number, row: number): { x: number; z: number } {
     return {
@@ -546,7 +579,9 @@ export class RatsGameEngine {
     this.difficulty = difficulty;
     const diffCfg = DIFFICULTIES[difficulty];
 
-    this.effectiveCriticalLimit = Math.max(40, level.criticalLimit + diffCfg.limitOffset);
+    this.effectiveCriticalLimit = level.isCommunity
+      ? level.criticalLimit
+      : Math.max(40, level.criticalLimit + diffCfg.limitOffset);
     this.effectiveRatSpeed = level.ratSpeed * diffCfg.ratSpeedMul;
     this.effectiveBreedCooldown = level.breedCooldown * diffCfg.breedCooldownMul;
     this.baseRewardCredits = Math.round(level.rewardCredits * diffCfg.rewardMul);
@@ -571,8 +606,8 @@ export class RatsGameEngine {
     this.wallTunnelMap.clear();
     this.wallExitToHoleMap.clear();
 
-    const halfW = this.cols / 2 + 2;
-    const halfH = this.rows / 2 + 2;
+    const halfW = this.cols / 2 + 4;
+    const halfH = this.rows / 2 + 4;
     this.keyLight.shadow.camera.left = -halfW;
     this.keyLight.shadow.camera.right = halfW;
     this.keyLight.shadow.camera.top = halfH;
@@ -612,18 +647,25 @@ export class RatsGameEngine {
     this.panX = 0;
     this.panZ = 0;
     this.mobileFitMode = false;
+    this.zoomFactor = 1;
     this.hoveredCell = null;
     this.previewGroup.visible = false;
 
-    this.biomeVisuals = createBiomeVisuals(level.biome, this.maxAnisotropy);
+    this.biomeVisuals = createBiomeVisuals(level.biome, this.maxAnisotropy, {
+      wallColor: level.customWallColor,
+      floorColor: level.customFloorColor,
+    });
     this.scene.background = new THREE.Color(this.biomeVisuals.bgHex);
-    this.scene.fog = new THREE.FogExp2(this.biomeVisuals.fogHex, 0.009);
+    const maxDim = Math.max(this.cols, this.rows);
+    const fogDensity = Math.min(0.0085, 0.22 / Math.max(20, maxDim));
+    this.scene.fog = new THREE.FogExp2(this.biomeVisuals.fogHex, fogDensity);
     this.keyLight.color.setHex(this.biomeVisuals.keyColor);
     this.hemiLight.color.setHex(this.biomeVisuals.hemiSky);
     this.hemiLight.groundColor.setHex(this.biomeVisuals.hemiGround);
 
+    const surroundSize = Math.max(160, maxDim * 2.8);
     const surround = new THREE.Mesh(
-      new THREE.PlaneGeometry(140, 140),
+      new THREE.PlaneGeometry(surroundSize, surroundSize),
       this.biomeVisuals.surroundMat,
     );
     surround.rotation.x = -Math.PI / 2;
@@ -2280,6 +2322,8 @@ export class RatsGameEngine {
       levelName: this.level.name,
       biome: this.level.biome,
       difficulty: this.difficulty,
+      isCommunity: this.level.isCommunity,
+      communityId: this.level.communityId,
       status: this.status,
       males,
       females,

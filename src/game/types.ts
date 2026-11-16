@@ -207,6 +207,12 @@ export interface LevelConfig {
   name: string;
   subtitle: string;
   biome: BiomeType;
+  customWallColor?: string;
+  customFloorColor?: string;
+  isCommunity?: boolean;
+  communityId?: string;
+  authorName?: string;
+  creatorDifficulty?: DifficultyLevel;
   layout: string[];
   tunnels: TunnelPair[];
   initialRats: Array<{ col: number; row: number; sex: RatSex }>;
@@ -215,6 +221,48 @@ export interface LevelConfig {
   tools: Record<BaseToolType, ToolSlotConfig>;
   ratSpeed: number;
   breedCooldown: number;
+}
+
+export interface CommunityTunnelDraft {
+  id: string;
+  kind: 'floor' | 'wall';
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  hex: number;
+}
+
+export interface CommunityLevelDoc {
+  id: string;
+  title: string;
+  description: string;
+  authorId: string;
+  authorName: string;
+  biome: BiomeType;
+  customWallColor: string;
+  customFloorColor: string;
+  difficulty: DifficultyLevel;
+  criticalLimit: number;
+  ratSpeed: number;
+  breedCooldown: number;
+  layout: string[];
+  tunnels: CommunityTunnelDraft[];
+  initialRats: Array<{ col: number; row: number; sex: RatSex }>;
+  isPublished: boolean;
+  bestTimeMs: number;
+  bestPlayerName: string;
+  playCount: number;
+  createdAtMs: number;
+}
+
+export interface LevelRunDoc {
+  runnerId: string;
+  levelId: string;
+  playerName: string;
+  timeMs: number;
+  eliminatedCount: number;
+  bornCount: number;
 }
 
 export interface PlayerProfile {
@@ -233,6 +281,8 @@ export interface GameSnapshot {
   levelName: string;
   biome: BiomeType;
   difficulty: DifficultyLevel;
+  isCommunity?: boolean;
+  communityId?: string;
   status: GameStatus;
   males: number;
   females: number;

@@ -1,0 +1,206 @@
+{
+  "entities": {
+    "CommunityLevel": {
+      "title": "CommunityLevel",
+      "description": "A user-created maze level and visual biome published to Online Disinfestation.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "description": "Display title of the community map."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "Short tactical note written by the creator."
+        },
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the level creator."
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Display nickname of the level creator."
+        },
+        "biome": {
+          "type": "string",
+          "enum": ["grass", "sand", "city", "ice", "lava", "moon"],
+          "description": "Visual environment preset."
+        },
+        "customWallColor": {
+          "type": "string",
+          "maxLength": 7,
+          "description": "Optional hex wall tint (#RRGGBB) or empty string."
+        },
+        "customFloorColor": {
+          "type": "string",
+          "maxLength": 7,
+          "description": "Optional hex floor tint (#RRGGBB) or empty string."
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "normal", "hard"],
+          "description": "Locked difficulty preset chosen by the creator."
+        },
+        "criticalLimit": {
+          "type": "integer",
+          "description": "Maximum rat population before overcrowding defeat (30-250)."
+        },
+        "ratSpeed": {
+          "type": "number",
+          "description": "Base rat movement speed."
+        },
+        "breedCooldown": {
+          "type": "number",
+          "description": "Cooldown in seconds between breeding cycles."
+        },
+        "layout": {
+          "type": "array",
+          "description": "Grid rows of '#' walls and '.' paths (9-100 rows, 11-100 cols)."
+        },
+        "tunnels": {
+          "type": "array",
+          "description": "Up to 4 linked floor or wall tunnel pairs."
+        },
+        "initialRats": {
+          "type": "array",
+          "description": "2 to 50 initial rat spawn coordinates and sexes."
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether the level is publicly playable by the community."
+        },
+        "bestTimeMs": {
+          "type": "integer",
+          "description": "Fastest recorded completion time in milliseconds (0 if uncompleted)."
+        },
+        "bestPlayerName": {
+          "type": "string",
+          "maxLength": 24,
+          "description": "Display nickname of the fastest player."
+        },
+        "playCount": {
+          "type": "integer",
+          "description": "Total completed community runs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "authorId",
+        "authorName",
+        "biome",
+        "customWallColor",
+        "customFloorColor",
+        "difficulty",
+        "criticalLimit",
+        "ratSpeed",
+        "breedCooldown",
+        "layout",
+        "tunnels",
+        "initialRats",
+        "isPublished",
+        "bestTimeMs",
+        "bestPlayerName",
+        "playCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LevelRun": {
+      "title": "LevelRun",
+      "description": "Personal best completion time for a player on a specific community level.",
+      "type": "object",
+      "properties": {
+        "levelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent community level ID."
+        },
+        "runnerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the player."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Public display nickname of the player."
+        },
+        "timeMs": {
+          "type": "integer",
+          "description": "Completion time in milliseconds (min 1000)."
+        },
+        "eliminatedCount": {
+          "type": "integer",
+          "description": "Rats eliminated during the record run."
+        },
+        "bornCount": {
+          "type": "integer",
+          "description": "Rats born during the record run."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Public visibility flag for leaderboard listing."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "levelId",
+        "runnerId",
+        "playerName",
+        "timeMs",
+        "eliminatedCount",
+        "bornCount",
+        "isPublic",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/community_levels/{levelId}": {
+      "schema": {
+        "$ref": "#/entities/CommunityLevel"
+      },
+      "description": "Publicly shared community levels created by players."
+    },
+    "/community_levels/{levelId}/runs/{runnerId}": {
+      "schema": {
+        "$ref": "#/entities/LevelRun"
+      },
+      "description": "Personal best completion time entries for each community level."
+    }
+  }
+}

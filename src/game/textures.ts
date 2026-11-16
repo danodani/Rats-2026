@@ -51,8 +51,28 @@ function makePixelTexture(
   return tex;
 }
 
-export function createBiomeVisuals(biome: BiomeType, maxAnisotropy: number): BiomeVisualSet {
+function parseHexRgb(hex?: string): [number, number, number] | null {
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return null;
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function shadeRgb(rgb: [number, number, number], factor: number, offset = 0): [number, number, number] {
+  return [
+    Math.max(0, Math.min(255, Math.round(rgb[0] * factor + offset))),
+    Math.max(0, Math.min(255, Math.round(rgb[1] * factor + offset))),
+    Math.max(0, Math.min(255, Math.round(rgb[2] * factor + offset))),
+  ];
+}
+
+export function createBiomeVisuals(
+  biome: BiomeType,
+  maxAnisotropy: number,
+  customColors?: { wallColor?: string; floorColor?: string },
+): BiomeVisualSet {
   const texturesToDispose: THREE.Texture[] = [];
+  const customWallRgb = parseHexRgb(customColors?.wallColor);
+  const customFloorRgb = parseHexRgb(customColors?.floorColor);
 
   // High-contrast walkable corridor tiles (matte stone paths)
   const floorMap = makePixelTexture(
@@ -60,6 +80,12 @@ export function createBiomeVisuals(biome: BiomeType, maxAnisotropy: number): Bio
     (x, y) => {
       const edge = x === 0 || y === 0 || x === 15 || y === 15;
       const n = hash2D(x, y, biome.length + 7);
+      if (customFloorRgb) {
+        if (edge) return shadeRgb(customFloorRgb, 0.78);
+        if (n > 0.68) return shadeRgb(customFloorRgb, 1.09, 6);
+        if (n < 0.25) return shadeRgb(customFloorRgb, 0.9, -4);
+        return customFloorRgb;
+      }
       if (biome === 'grass') {
         // Classic Rats! gray slate corridor contrasting strongly with green grass walls
         const base = edge ? 84 : 110 + (n > 0.65 ? 8 : n < 0.25 ? -6 : 0);
@@ -101,6 +127,24 @@ export function createBiomeVisuals(biome: BiomeType, maxAnisotropy: number): Bio
     (x, y) => {
       const border = x === 0 || y === 0 || x === 15 || y === 15;
       const n = hash2D(x, y, biome.length * 13);
+
+      if (customWallRgb) {
+        if (border) return shadeRgb(customWallRgb, 0.72);
+        if (biome === 'city') {
+          const winRow = (y >= 3 && y <= 5) || (y >= 10 && y <= 12);
+          const winCol = (x >= 3 && x <= 5) || (x >= 10 && x <= 12);
+          if (winRow && winCol) {
+            return (x + y) % 3 === 0 ? [232, 206, 132] : [66, 86, 112];
+          }
+        } else if (biome === 'grass' && ((x === 4 && y === 5) || (x === 11 && y === 11))) {
+          return n > 0.5 ? [240, 240, 232] : [214, 72, 168];
+        } else if (biome === 'sand' && (y === 7 || (x === 8 && y > 7))) {
+          return shadeRgb(customWallRgb, 0.84);
+        }
+        if (n > 0.72) return shadeRgb(customWallRgb, 1.12, 8);
+        if (n < 0.25) return shadeRgb(customWallRgb, 0.86, -4);
+        return customWallRgb;
+      }
 
       if (biome === 'grass') {
         // Natural rich meadow green with classic flower dots (no neon)
@@ -235,8 +279,14 @@ export function createBiomeVisuals(biome: BiomeType, maxAnisotropy: number): Bio
     },
   }[biome];
 
+  const surroundColorHex = customWallRgb
+    ? ((Math.round(customWallRgb[0] * 0.72) << 16) |
+        (Math.round(customWallRgb[1] * 0.72) << 8) |
+        Math.round(customWallRgb[2] * 0.72))
+    : palette.surround;
+
   const surroundMat = new THREE.MeshStandardMaterial({
-    color: palette.surround,
+    color: surroundColorHex,
     roughness: 0.94,
     metalness: 0.0,
   });

@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Atom,
   Bomb,
   BrickWall,
   Check,
+  Clock,
   Coins,
   Copy,
   Dna,
@@ -20,18 +22,24 @@ import {
   Radiation,
   RotateCcw,
   Save,
+  Share2,
   ShieldAlert,
   ShoppingBag,
   Skull,
+  Sparkles,
   Trash2,
+  Trophy,
   Upload,
   User,
+  Users,
   Volume2,
   VolumeX,
   Wind,
   X,
   ZoomIn,
 } from 'lucide-react';
+import { onAuthStateChanged, signInWithPopup, signOut, type User as FirebaseUser } from 'firebase/auth';
+import { auth, googleProvider } from './firebase';
 import { soundEngine } from './game/audio';
 import { RatsGameEngine } from './game/engine';
 import {
@@ -40,7 +48,7 @@ import {
   LANGUAGE_OPTIONS,
   TRANSLATIONS,
 } from './game/i18n';
-import { LEVELS } from './game/levels';
+import { communityLevelToConfig, LEVELS } from './game/levels';
 import {
   BASE_TOOL_ORDER,
   DIFFICULTIES,
@@ -51,15 +59,24 @@ import {
   TOOLS_META,
   type BaseToolType,
   type BiomeType,
+  type CommunityLevelDoc,
   type DifficultyLevel,
   type GameSnapshot,
   type LanguageCode,
+  type LevelConfig,
   type PlayerProfile,
   type StoreToolType,
   type ToolType,
 } from './game/types';
+import { CommunityHub } from './components/CommunityHub';
+import { LevelEditorModal } from './components/LevelEditorModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import {
+  fetchCommunityLevelById,
+  formatRunTime,
+  submitCommunityRun,
+} from './services/communityService';
 
 const PROFILE_STORAGE_KEY = 'rats_player_profile_v2';
 
@@ -198,14 +215,13 @@ function formatSavedTime(
   }
 }
 
-function buildInitialSnapshot(
-  levelIdx: number,
+function buildInitialSnapshotFromConfig(
+  lvl: LevelConfig,
   difficulty: DifficultyLevel,
   stock: Record<StoreToolType, number>,
 ): GameSnapshot {
-  const lvl = LEVELS[levelIdx];
   const diff = DIFFICULTIES[difficulty];
-  const baseReward = Math.round(lvl.rewardCredits * diff.rewardMul);
+  const baseReward = lvl.isCommunity ? 0 : Math.round(lvl.rewardCredits * diff.rewardMul);
   const inv: Record<ToolType, number> = {
     bomb: lvl.tools.bomb.start,
     gas: lvl.tools.gas.start,
@@ -213,8 +229,8 @@ function buildInitialSnapshot(
     nuclear: lvl.tools.nuclear.start,
     tempWall: lvl.tools.tempWall.start,
     mutagen: lvl.tools.mutagen.start,
-    permWall: Math.max(0, Math.min(STORE_MAX_STOCK.permWall, stock.permWall)),
-    plague: Math.max(0, Math.min(STORE_MAX_STOCK.plague, stock.plague)),
+    permWall: lvl.isCommunity ? 0 : Math.max(0, Math.min(STORE_MAX_STOCK.permWall, stock.permWall)),
+    plague: lvl.isCommunity ? 0 : Math.max(0, Math.min(STORE_MAX_STOCK.plague, stock.plague)),
   };
   const maxInv: Record<BaseToolType, number> = {
     bomb: lvl.tools.bomb.max,
@@ -229,6 +245,8 @@ function buildInitialSnapshot(
     levelName: lvl.name,
     biome: lvl.biome,
     difficulty,
+    isCommunity: lvl.isCommunity,
+    communityId: lvl.communityId,
     status: 'playing',
     males: lvl.initialRats.filter((r) => r.sex === 'M').length,
     females: lvl.initialRats.filter((r) => r.sex === 'F').length,
@@ -237,7 +255,7 @@ function buildInitialSnapshot(
     sterile: 0,
     infected: 0,
     totalRats: lvl.initialRats.length,
-    criticalLimit: Math.max(40, lvl.criticalLimit + diff.limitOffset),
+    criticalLimit: Math.max(30, lvl.criticalLimit + (lvl.isCommunity ? 0 : diff.limitOffset)),
     eliminatedCount: 0,
     bornCount: 0,
     elapsedSeconds: 0,
@@ -266,9 +284,24 @@ export default function App() {
   const [welcomeName, setWelcomeName] = useState<string>(
     initialStored.hasSavedGame ? '' : initialStored.profile.username,
   );
-  const [screen, setScreen] = useState<'welcome' | 'menu' | 'game'>('welcome');
+  const [screen, setScreen] = useState<'welcome' | 'modes' | 'menu' | 'online' | 'game'>('welcome');
   const [menuTab, setMenuTab] = useState<'levels' | 'store' | 'save' | 'rules'>('levels');
   const [levelIdx, setLevelIdx] = useState(0);
+  const [activeCommunityConfig, setActiveCommunityConfig] = useState<LevelConfig | null>(null);
+  const [showEditor, setShowEditor] = useState(false);
+
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const firebaseUserRef = useRef<FirebaseUser | null>(null);
+  firebaseUserRef.current = firebaseUser;
+
+  const [pendingDeepLinkId, setPendingDeepLinkId] = useState<string | null>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('level');
+      return p && p.trim() ? p.trim() : null;
+    } catch {
+      return null;
+    }
+  });
 
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RatsGameEngine | null>(null);
@@ -277,9 +310,11 @@ export default function App() {
   profileRef.current = profile;
   const levelIdxRef = useRef(levelIdx);
   levelIdxRef.current = levelIdx;
+  const communityConfigRef = useRef<LevelConfig | null>(activeCommunityConfig);
+  communityConfigRef.current = activeCommunityConfig;
 
   const [snapshot, setSnapshot] = useState<GameSnapshot>(() =>
-    buildInitialSnapshot(0, profile.difficulty, profile.storeStock),
+    buildInitialSnapshotFromConfig(LEVELS[0], profile.difficulty, profile.storeStock),
   );
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -291,6 +326,16 @@ export default function App() {
     penalty: number;
   } | null>(null);
 
+  const [communityRunStatus, setCommunityRunStatus] = useState<{
+    submitting: boolean;
+    saved: boolean;
+    isNewWorldRecord: boolean;
+    isNewPersonalBest: boolean;
+    recordedTimeMs: number;
+    error?: string;
+  } | null>(null);
+  const [victoryShareCopied, setVictoryShareCopied] = useState(false);
+
   // Save manager UI states
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
@@ -299,8 +344,28 @@ export default function App() {
   const t = TRANSLATIONS[profile.language];
 
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setFirebaseUser(u);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     document.documentElement.lang = profile.language;
   }, [profile.language]);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      soundEngine.unlock();
+      await signInWithPopup(auth, googleProvider);
+    } catch {
+      // popup cancelled or blocked
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    await signOut(auth);
+  };
 
   const updateProfile = (updater: (prev: PlayerProfile) => PlayerProfile, stampSave = true) => {
     setProfile((prev) => {
@@ -322,27 +387,98 @@ export default function App() {
     window.setTimeout(() => setSaveNotice(null), 2600);
   };
 
+  const recordCommunityVictory = async (
+    communityId: string,
+    elapsedSeconds: number,
+    eliminatedCount: number,
+    bornCount: number,
+    user: FirebaseUser,
+  ) => {
+    setCommunityRunStatus({
+      submitting: true,
+      saved: false,
+      isNewWorldRecord: false,
+      isNewPersonalBest: false,
+      recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+    });
+    try {
+      const res = await submitCommunityRun(
+        communityId,
+        elapsedSeconds,
+        eliminatedCount,
+        bornCount,
+        user,
+        profileRef.current.username,
+      );
+      setCommunityRunStatus({
+        submitting: false,
+        saved: true,
+        isNewWorldRecord: res.isNewWorldRecord,
+        isNewPersonalBest: res.isNewPersonalBest,
+        recordedTimeMs: res.recordedTimeMs,
+      });
+    } catch (e) {
+      setCommunityRunStatus({
+        submitting: false,
+        saved: false,
+        isNewWorldRecord: false,
+        isNewPersonalBest: false,
+        recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+        error: e instanceof Error ? e.message : 'Error',
+      });
+    }
+  };
+
   // Mount/unmount WebGL engine strictly when entering/exiting the 3D arena
   useEffect(() => {
     if (screen !== 'game' || !canvasHostRef.current) return;
 
     rewardClaimedRef.current = false;
     setLastWinSummary(null);
-    const activeIdx = levelIdxRef.current;
-    const chosenLevel = LEVELS[activeIdx];
-    const currentDiff = profileRef.current.difficulty;
-    const initialStock = { ...profileRef.current.storeStock };
-    setSnapshot(buildInitialSnapshot(activeIdx, currentDiff, initialStock));
+    setCommunityRunStatus(null);
+    setVictoryShareCopied(false);
+
+    const customLevel = communityConfigRef.current;
+    const chosenLevel = customLevel ?? LEVELS[levelIdxRef.current];
+    const effectiveDiff = customLevel
+      ? customLevel.creatorDifficulty ?? 'normal'
+      : profileRef.current.difficulty;
+    const initialStock = customLevel
+      ? { permWall: 0, plague: 0 }
+      : { ...profileRef.current.storeStock };
+    setSnapshot(buildInitialSnapshotFromConfig(chosenLevel, effectiveDiff, initialStock));
 
     const engine = new RatsGameEngine(
       canvasHostRef.current,
       chosenLevel,
-      currentDiff,
+      effectiveDiff,
       initialStock,
       (snap) => {
         setSnapshot(snap);
         if (snap.status === 'won' && !rewardClaimedRef.current) {
           rewardClaimedRef.current = true;
+          if (snap.isCommunity) {
+            const timeMs = Math.max(1000, Math.round(snap.elapsedSeconds * 1000));
+            if (snap.communityId && firebaseUserRef.current) {
+              void recordCommunityVictory(
+                snap.communityId,
+                snap.elapsedSeconds,
+                snap.eliminatedCount,
+                snap.bornCount,
+                firebaseUserRef.current,
+              );
+            } else {
+              setCommunityRunStatus({
+                submitting: false,
+                saved: false,
+                isNewWorldRecord: false,
+                isNewPersonalBest: false,
+                recordedTimeMs: timeMs,
+              });
+            }
+            return;
+          }
+
           const earned = snap.currentRewardCredits;
           const base = snap.baseRewardCredits;
           const penalty = Math.max(0, base - earned);
@@ -361,6 +497,7 @@ export default function App() {
         }
       },
       (storeTool) => {
+        if (communityConfigRef.current) return;
         updateProfile((prev) => ({
           ...prev,
           storeStock: {
@@ -417,6 +554,8 @@ export default function App() {
     soundEngine.unlock();
     soundEngine.playUiClick(740);
     rewardClaimedRef.current = false;
+    communityConfigRef.current = null;
+    setActiveCommunityConfig(null);
     levelIdxRef.current = idx;
     setLevelIdx(idx);
     if (screen === 'game' && engineRef.current) {
@@ -427,10 +566,42 @@ export default function App() {
     }
   };
 
+  const startCommunityConfig = (cfg: LevelConfig) => {
+    soundEngine.unlock();
+    soundEngine.playUiClick(740);
+    rewardClaimedRef.current = false;
+    setLastWinSummary(null);
+    setCommunityRunStatus(null);
+    setShowEditor(false);
+    communityConfigRef.current = cfg;
+    setActiveCommunityConfig(cfg);
+    if (screen === 'game' && engineRef.current) {
+      engineRef.current.loadLevel(cfg, cfg.creatorDifficulty ?? 'normal', {
+        permWall: 0,
+        plague: 0,
+      });
+    } else {
+      setScreen('game');
+    }
+  };
+
+  const startCommunityDoc = (docItem: CommunityLevelDoc) => {
+    startCommunityConfig(communityLevelToConfig(docItem));
+  };
+
   const restartCurrentLevel = () => {
     rewardClaimedRef.current = false;
     setLastWinSummary(null);
-    engineRef.current?.restartLevel(profile.difficulty, profile.storeStock);
+    setCommunityRunStatus(null);
+    const custom = communityConfigRef.current;
+    if (custom) {
+      engineRef.current?.loadLevel(custom, custom.creatorDifficulty ?? 'normal', {
+        permWall: 0,
+        plague: 0,
+      });
+    } else {
+      engineRef.current?.restartLevel(profile.difficulty, profile.storeStock);
+    }
   };
 
   const buyStoreItem = (item: StoreToolType) => {
@@ -527,6 +698,26 @@ export default function App() {
     window.setTimeout(() => setSaveNotice(null), 2600);
   };
 
+  const routeAfterWelcome = async () => {
+    if (pendingDeepLinkId) {
+      const targetId = pendingDeepLinkId;
+      setPendingDeepLinkId(null);
+      try {
+        window.history.replaceState({}, '', window.location.pathname);
+      } catch {
+        // ignore
+      }
+      const docFound = await fetchCommunityLevelById(targetId);
+      if (docFound) {
+        startCommunityDoc(docFound);
+        return;
+      }
+      setScreen('online');
+      return;
+    }
+    setScreen('modes');
+  };
+
   const handleStartNewGame = (e: React.FormEvent) => {
     e.preventDefault();
     soundEngine.unlock();
@@ -541,14 +732,14 @@ export default function App() {
     setHasSavedGame(true);
     setLevelIdx(0);
     setMenuTab('levels');
-    setScreen('menu');
+    void routeAfterWelcome();
   };
 
   const handleContinueGame = () => {
     soundEngine.unlock();
     soundEngine.playUiClick(760);
     setMenuTab('levels');
-    setScreen('menu');
+    void routeAfterWelcome();
   };
 
   const toggleMute = () => {
@@ -726,6 +917,180 @@ export default function App() {
     );
   }
 
+  if (screen === 'modes') {
+    return (
+      <div className="relative w-full h-[100dvh] overflow-y-auto bg-[#0f1720] text-slate-100 flex flex-col">
+        <OfflineIndicator label={t.offlineMode} />
+
+        {/* Top Bar */}
+        <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-4 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setScreen('welcome')}
+            className="min-h-[40px] px-3 rounded-xl border border-white/10 bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>{t.backToTitleBtn}</span>
+          </button>
+
+          <div className="flex items-center gap-2">
+            <label className="min-h-[40px] px-2.5 flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium transition cursor-pointer">
+              <Globe className="w-4 h-4 text-sky-400 shrink-0" />
+              <select
+                aria-label={t.languageLabel}
+                value={profile.language}
+                onChange={(e) => handleLanguageChange(e.target.value as LanguageCode)}
+                className="bg-transparent text-xs font-semibold text-white focus:outline-none cursor-pointer pr-1"
+              >
+                {LANGUAGE_OPTIONS.map((opt) => (
+                  <option key={opt.code} value={opt.code} className="bg-slate-900 text-white">
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <PWAInstallButton labels={pwaLabels} />
+          </div>
+        </div>
+
+        {/* Center Mode Cards */}
+        <main className="flex-1 flex items-center justify-center px-4 py-6">
+          <div className="w-full max-w-4xl space-y-6">
+            <div className="text-center space-y-1.5">
+              <h1 className="font-display text-3xl sm:text-4xl font-bold text-white">
+                {t.modesTitle}
+              </h1>
+              <p className="text-sm text-slate-300">{t.modesSubtitle(profile.username)}</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Mode 1: Storia della Disinfestazione */}
+              <div className="rounded-3xl border border-sky-400/30 bg-slate-900/90 p-6 flex flex-col justify-between gap-5 shadow-2xl">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="p-3 rounded-2xl bg-sky-500/15 border border-sky-400/30 text-sky-300">
+                      <Trophy className="w-6 h-6" />
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-sky-500/15 border border-sky-400/25 text-[11px] font-mono-nums font-bold text-sky-300">
+                      {t.modeStoryBadge}
+                    </span>
+                  </div>
+                  <h2 className="font-display text-2xl font-bold text-white">
+                    {t.modeStoryTitle}
+                  </h2>
+                  <p className="text-sm text-slate-300 leading-relaxed">{t.modeStoryDesc}</p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-400 border-t border-white/10 pt-3 font-mono-nums">
+                    <span>
+                      {t.completedCount}: <strong className="text-white">{profile.completedLevels.length}/{LEVELS.length}</strong>
+                    </span>
+                    <span className="text-amber-300 font-bold">
+                      {profile.credits} {t.creditsUnit}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.unlock();
+                      soundEngine.playUiClick(740);
+                      setMenuTab('levels');
+                      setScreen('menu');
+                    }}
+                    className="w-full min-h-[48px] rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{t.modeStoryBtn}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Mode 2: Disinfestazione Online */}
+              <div className="rounded-3xl border border-emerald-400/30 bg-slate-900/90 p-6 flex flex-col justify-between gap-5 shadow-2xl">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-400/30 text-emerald-300">
+                      <Users className="w-6 h-6" />
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-400/25 text-[11px] font-mono-nums font-bold text-emerald-300">
+                      {t.modeOnlineBadge}
+                    </span>
+                  </div>
+                  <h2 className="font-display text-2xl font-bold text-white">
+                    {t.modeOnlineTitle}
+                  </h2>
+                  <p className="text-sm text-slate-300 leading-relaxed">{t.modeOnlineDesc}</p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-400 border-t border-white/10 pt-3">
+                    <span className="flex items-center gap-1.5 text-emerald-300">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>{t.editorTitle}</span>
+                    </span>
+                    <span className="font-mono-nums text-amber-300 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      Top 20
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.unlock();
+                      soundEngine.playUiClick(760);
+                      setScreen('online');
+                    }}
+                    className="w-full min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition"
+                  >
+                    <Users className="w-4 h-4" />
+                    <span>{t.modeOnlineBtn}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (screen === 'online') {
+    return (
+      <>
+        <CommunityHub
+          t={t}
+          language={profile.language}
+          user={firebaseUser}
+          username={profile.username}
+          onLanguageChange={handleLanguageChange}
+          onBackToModes={() => setScreen('modes')}
+          onSignIn={handleGoogleSignIn}
+          onSignOut={handleGoogleSignOut}
+          onOpenEditor={() => setShowEditor(true)}
+          onPlayLevel={startCommunityDoc}
+        />
+        {showEditor && (
+          <LevelEditorModal
+            t={t}
+            user={firebaseUser}
+            username={profile.username}
+            onSignIn={handleGoogleSignIn}
+            onClose={() => setShowEditor(false)}
+            onTestLevel={(cfg) => startCommunityConfig(cfg)}
+            onPublished={async (newId) => {
+              setShowEditor(false);
+              const created = await fetchCommunityLevelById(newId);
+              if (created) {
+                startCommunityDoc(created);
+              }
+            }}
+          />
+        )}
+      </>
+    );
+  }
+
   if (screen === 'menu') {
     const activeDiff = DIFFICULTIES[profile.difficulty];
     const activeDiffLabel = t.difficulties[profile.difficulty].label;
@@ -741,12 +1106,21 @@ export default function App() {
             <div className="flex items-center gap-3">
               <button
                 type="button"
+                onClick={() => setScreen('modes')}
+                className="min-h-[40px] px-3 rounded-xl border border-white/10 bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition"
+                title={t.switchModeBtn}
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">{t.switchModeBtn}</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setScreen('welcome')}
                 title={t.backToTitleBtn}
                 className="text-left group"
               >
-                <h1 className="font-display text-3xl sm:text-4xl font-bold tracking-tight text-white group-hover:text-sky-300 transition">
-                  {t.welcomeTitle}
+                <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white group-hover:text-sky-300 transition">
+                  {t.modeStoryTitle}
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-400">
                   {t.brandSubtitle(activeDiffLabel)}
@@ -1288,16 +1662,18 @@ export default function App() {
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
-            onClick={() => setScreen('menu')}
+            onClick={() => setScreen(snapshot.isCommunity ? 'online' : 'menu')}
             className="flex items-center gap-1.5 min-h-[36px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-white/10 text-xs font-semibold text-white transition whitespace-nowrap shrink-0"
             title={t.hudMenuTitle}
           >
             <Home className="w-3.5 h-3.5 text-sky-400" />
-            <span>{t.hudMenu}</span>
+            <span>{snapshot.isCommunity ? 'Online' : t.hudMenu}</span>
           </button>
 
           <span className="hidden sm:inline text-xs font-medium text-slate-200 truncate">
-            Lv.{snapshot.levelId} · {levelNameLocalized} ({diffLabel})
+            {snapshot.isCommunity
+              ? `${levelNameLocalized} (${diffLabel})`
+              : `Lv.${snapshot.levelId} · ${levelNameLocalized} (${diffLabel})`}
           </span>
         </div>
 
@@ -1354,13 +1730,20 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          <span
-            className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-amber-400 whitespace-nowrap"
-            title={t.hudRewardTitle}
-          >
-            <Coins className="w-3.5 h-3.5" />
-            <span>+{snapshot.currentRewardCredits}</span>
-          </span>
+          {snapshot.isCommunity ? (
+            <span className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-sky-300 whitespace-nowrap">
+              <Clock className="w-3.5 h-3.5" />
+              <span>{formatRunTime(Math.round(snapshot.elapsedSeconds * 1000))}</span>
+            </span>
+          ) : (
+            <span
+              className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-amber-400 whitespace-nowrap"
+              title={t.hudRewardTitle}
+            >
+              <Coins className="w-3.5 h-3.5" />
+              <span>+{snapshot.currentRewardCredits}</span>
+            </span>
+          )}
 
           <button
             type="button"
@@ -1431,7 +1814,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => engineRef.current?.toggleMobileFitMode()}
-              className="md:hidden absolute top-2.5 right-2.5 z-10 min-h-[36px] px-2.5 py-1 rounded-lg bg-slate-950/85 border border-white/15 text-xs font-semibold text-slate-100 flex items-center gap-1.5 shadow-lg active:scale-95 transition"
+              className="absolute top-2.5 right-2.5 z-10 min-h-[36px] px-2.5 py-1 rounded-lg bg-slate-950/85 border border-white/15 text-xs font-semibold text-slate-100 flex items-center gap-1.5 shadow-lg active:scale-95 transition"
             >
               {snapshot.mobileFitMode ? (
                 <>
@@ -1453,7 +1836,9 @@ export default function App() {
           <div className="px-3.5 py-2.5 border-b border-white/10 flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-[11px] font-mono-nums uppercase tracking-wider text-slate-400">
-                Lv.{String(snapshot.levelId).padStart(2, '0')} · {t.biomes[snapshot.biome]}
+                {snapshot.isCommunity
+                  ? `${t.modeOnlineTitle} · ${t.biomes[snapshot.biome]}`
+                  : `Lv.${String(snapshot.levelId).padStart(2, '0')} · ${t.biomes[snapshot.biome]}`}
               </div>
               <div className="font-display text-sm font-bold text-white truncate">
                 {levelNameLocalized}
@@ -1768,7 +2153,11 @@ export default function App() {
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/75 p-4">
           <div className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-950 p-6 shadow-2xl">
             <h2 className="font-display text-2xl font-bold text-white">
-              {snapshot.status === 'won' ? t.wonTitle : t.lostTitle}
+              {snapshot.status === 'won'
+                ? snapshot.isCommunity && !snapshot.communityId
+                  ? t.onlineTestWinTitle
+                  : t.wonTitle
+                : t.lostTitle}
             </h2>
             <p className="mt-1.5 text-sm text-slate-300">
               {snapshot.status === 'won'
@@ -1776,7 +2165,8 @@ export default function App() {
                 : t.lossOvercrowding(snapshot.criticalLimit)}
             </p>
 
-            {snapshot.status === 'won' && lastWinSummary && (
+            {/* Story Mode Credit Summary */}
+            {snapshot.status === 'won' && !snapshot.isCommunity && lastWinSummary && (
               <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 space-y-1">
                 <div className="flex items-center justify-between text-xs text-amber-200/80">
                   <span>{t.baseReward(diffLabel)}</span>
@@ -1801,6 +2191,60 @@ export default function App() {
               </div>
             )}
 
+            {/* Community Online Speedrun Record Summary */}
+            {snapshot.status === 'won' && snapshot.isCommunity && communityRunStatus && (
+              <div className="mt-3 rounded-xl border border-sky-400/35 bg-sky-500/10 px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-sky-200">{t.onlineWonTime}</span>
+                  <span className="font-mono-nums text-xl font-bold text-white">
+                    {formatRunTime(communityRunStatus.recordedTimeMs)}
+                  </span>
+                </div>
+
+                {snapshot.communityId && (
+                  <>
+                    {communityRunStatus.submitting && (
+                      <div className="text-xs text-sky-300">{t.onlineSubmittingRecord}</div>
+                    )}
+                    {communityRunStatus.saved && (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        {communityRunStatus.isNewWorldRecord ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 font-bold">
+                            {t.onlineNewWorldRecord}
+                          </span>
+                        ) : communityRunStatus.isNewPersonalBest ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-500 text-slate-950 font-bold">
+                            {t.onlineNewPersonalBest}
+                          </span>
+                        ) : null}
+                        <span className="text-emerald-300">{t.onlineRecordSaved}</span>
+                      </div>
+                    )}
+                    {!firebaseUser && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await handleGoogleSignIn();
+                          if (auth.currentUser && snapshot.communityId) {
+                            await recordCommunityVictory(
+                              snapshot.communityId,
+                              snapshot.elapsedSeconds,
+                              snapshot.eliminatedCount,
+                              snapshot.bornCount,
+                              auth.currentUser,
+                            );
+                          }
+                        }}
+                        className="w-full min-h-[38px] rounded-lg bg-white hover:bg-slate-200 text-slate-950 font-bold text-xs transition"
+                      >
+                        {t.onlineSignInToSubmit}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="mt-4 grid grid-cols-3 gap-3 border-y border-white/10 py-3 text-center">
               <div>
                 <div className="text-[11px] text-slate-400">{t.statEliminated}</div>
@@ -1817,19 +2261,41 @@ export default function App() {
               <div>
                 <div className="text-[11px] text-slate-400">{t.statTime}</div>
                 <div className="font-mono-nums text-lg font-bold text-sky-400">
-                  {Math.round(snapshot.elapsedSeconds)}s
+                  {snapshot.isCommunity
+                    ? formatRunTime(Math.round(snapshot.elapsedSeconds * 1000))
+                    : `${Math.round(snapshot.elapsedSeconds)}s`}
                 </div>
               </div>
             </div>
 
-            <div className="mt-5 flex items-center gap-2.5">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
-                onClick={() => setScreen('menu')}
+                onClick={() => setScreen(snapshot.isCommunity ? 'online' : 'menu')}
                 className="min-h-[44px] px-4 rounded-xl border border-white/15 bg-slate-900 hover:bg-slate-800 text-slate-200 font-semibold text-sm transition"
               >
-                {t.menuStoreBtn}
+                {snapshot.isCommunity ? t.onlineBackToOnline : t.menuStoreBtn}
               </button>
+
+              {snapshot.isCommunity && snapshot.communityId && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const url = `${window.location.origin}${window.location.pathname}?level=${encodeURIComponent(snapshot.communityId!)}`;
+                    try {
+                      await navigator.clipboard.writeText(url);
+                    } catch {
+                      // ignore
+                    }
+                    setVictoryShareCopied(true);
+                    window.setTimeout(() => setVictoryShareCopied(false), 2400);
+                  }}
+                  className="min-h-[44px] px-3.5 rounded-xl border border-white/15 bg-slate-900 hover:bg-slate-800 text-sky-300 font-semibold text-sm flex items-center gap-1.5 transition"
+                >
+                  {victoryShareCopied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+                  <span>{t.onlineShareBtn}</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1839,7 +2305,7 @@ export default function App() {
                 {t.retryBtn}
               </button>
 
-              {snapshot.status === 'won' && levelIdx < LEVELS.length - 1 && (
+              {snapshot.status === 'won' && !snapshot.isCommunity && levelIdx < LEVELS.length - 1 && (
                 <button
                   type="button"
                   onClick={() => startLevel(levelIdx + 1)}

@@ -143,6 +143,7 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
   const [leaderboardLevel, setLeaderboardLevel] = useState<CommunityLevelDoc | null>(null);
   const [runs, setRuns] = useState<LevelRunDoc[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -192,10 +193,13 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
     soundEngine.playUiClick(720);
     setLeaderboardLevel(lvl);
     setRuns([]);
+    setRunsError(null);
     setRunsLoading(true);
     try {
-      const list = await fetchLevelLeaderboard(lvl.id);
+      const list = await fetchLevelLeaderboard(lvl.id, lvl.objectiveMode);
       setRuns(list);
+    } catch (e) {
+      setRunsError(e instanceof Error ? e.message : 'Error');
     } finally {
       setRunsLoading(false);
     }
@@ -405,7 +409,22 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
                       {lvl.description && (
                         <p className="mt-1 text-xs text-slate-300 line-clamp-2">{lvl.description}</p>
                       )}
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span
+                          className={`px-2 py-0.5 rounded font-semibold ${
+                            lvl.objectiveMode === 'survival'
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : lvl.objectiveMode === 'target_kills'
+                                ? 'bg-emerald-500/20 text-emerald-300'
+                                : 'bg-indigo-500/20 text-indigo-300'
+                          }`}
+                        >
+                          {lvl.objectiveMode === 'survival'
+                            ? t.modeSurvivalName(lvl.targetDurationSec)
+                            : lvl.objectiveMode === 'target_kills'
+                              ? t.modeQuotaName(lvl.targetKills)
+                              : t.modeEradicationName}
+                        </span>
                         <span
                           className={`px-2 py-0.5 rounded font-semibold ${
                             lvl.difficulty === 'easy'
@@ -428,7 +447,17 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
                   <div className="flex items-center justify-between rounded-xl bg-slate-950/75 border border-white/5 px-3 py-2 text-xs">
                     <div className="flex items-center gap-1.5 text-amber-300">
                       <Trophy className="w-4 h-4 shrink-0" />
-                      {lvl.bestTimeMs > 0 ? (
+                      {lvl.objectiveMode === 'survival' && (lvl.bestEliminatedCount > 0 || lvl.bestScore > 0) ? (
+                        <span className="font-mono-nums">
+                          {t.onlineRecordLabel}:{' '}
+                          <strong>
+                            {lvl.bestEliminatedCount > 0
+                              ? `${lvl.bestEliminatedCount} ${t.ratsKilledUnit}`
+                              : `${lvl.bestScore} ${t.storyScoreUnit}`}
+                          </strong>{' '}
+                          ({lvl.bestPlayerName})
+                        </span>
+                      ) : lvl.bestTimeMs > 0 ? (
                         <span className="font-mono-nums">
                           {t.onlineRecordLabel}: <strong>{formatRunTime(lvl.bestTimeMs)}</strong> (
                           {lvl.bestPlayerName})
@@ -514,9 +543,28 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
               </button>
             </div>
 
+            <div className="px-5 py-2.5 border-b border-white/10 bg-slate-900/60 text-[11px] text-slate-300">
+              {leaderboardLevel.objectiveMode === 'survival'
+                ? t.leaderboardRuleSurvival
+                : leaderboardLevel.objectiveMode === 'target_kills'
+                  ? t.leaderboardRuleQuota
+                  : t.leaderboardRuleEradication}
+            </div>
+
             <div className="overflow-y-auto p-4 space-y-2">
               {runsLoading ? (
                 <div className="py-8 text-center text-xs text-slate-400">...</div>
+              ) : runsError ? (
+                <div className="py-6 text-center space-y-2">
+                  <div className="text-xs text-rose-300 break-words">{runsError}</div>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenLeaderboard(leaderboardLevel)}
+                    className="min-h-[34px] px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white"
+                  >
+                    {t.retryBtn}
+                  </button>
+                </div>
               ) : runs.length === 0 ? (
                 <div className="py-8 text-center text-xs text-slate-400">
                   {t.onlineLeaderboardEmpty}
@@ -542,13 +590,36 @@ export const CommunityHub: React.FC<CommunityHubProps> = ({
                       <span className="font-semibold text-white truncate">{run.playerName}</span>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-[11px] text-slate-400 font-mono-nums">
-                        {run.eliminatedCount} {t.statEliminated.toLowerCase()}
-                      </span>
-                      <span className="font-mono-nums font-bold text-sky-300 flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5" />
-                        {formatRunTime(run.timeMs)}
-                      </span>
+                      {leaderboardLevel.objectiveMode === 'survival' ? (
+                        <>
+                          <span className="text-[11px] text-slate-400 font-mono-nums">
+                            {run.babiesEliminatedCount} {t.babiesEliminatedShort}
+                          </span>
+                          <span className="font-mono-nums font-bold text-amber-300">
+                            {run.eliminatedCount} {t.ratsKilledUnit}
+                          </span>
+                        </>
+                      ) : leaderboardLevel.objectiveMode === 'target_kills' ? (
+                        <>
+                          <span className="text-[11px] text-emerald-300/85 font-mono-nums">
+                            {run.babiesEliminatedCount} {t.babiesEliminatedShort}
+                          </span>
+                          <span className="font-mono-nums font-bold text-sky-300 flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            {formatRunTime(run.timeMs)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[11px] text-slate-400 font-mono-nums">
+                            {run.eliminatedCount} {t.ratsKilledUnit}
+                          </span>
+                          <span className="font-mono-nums font-bold text-sky-300 flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            {formatRunTime(run.timeMs)}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))

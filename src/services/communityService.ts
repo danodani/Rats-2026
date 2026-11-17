@@ -22,14 +22,19 @@ import type {
   CommunityLevelDoc,
   CommunityTunnelDraft,
   DifficultyLevel,
+  GameObjectiveMode,
   LevelRunDoc,
   RatSex,
+  StoryLevelSummary,
+  StoryRunDoc,
 } from '../game/types';
 
 const LEVELS_COLLECTION = 'community_levels';
+const STORY_LEVELS_COLLECTION = 'story_levels';
 
 const VALID_BIOMES = new Set<BiomeType>(['grass', 'sand', 'city', 'ice', 'lava', 'moon']);
 const VALID_DIFFS = new Set<DifficultyLevel>(['easy', 'normal', 'hard']);
+const VALID_OBJECTIVES = new Set<GameObjectiveMode>(['eradication', 'survival', 'target_kills']);
 const HEX_REGEX = /^#[0-9a-fA-F]{6}$/;
 
 function cleanHexOrEmpty(val?: string): string {
@@ -45,6 +50,53 @@ function toTimestampMs(val: unknown): number {
   return Date.now();
 }
 
+interface ComparableRun {
+  timeMs: number;
+  score: number;
+  eliminatedCount: number;
+  babiesEliminatedCount: number;
+}
+
+export function compareRunsByObjective(
+  objectiveMode: GameObjectiveMode,
+  a: ComparableRun,
+  b: ComparableRun,
+): number {
+  if (objectiveMode === 'survival') {
+    // Resistenza: most rats eliminated overall wins; tie-breakers: baby kills, score, time
+    return (
+      b.eliminatedCount - a.eliminatedCount ||
+      b.babiesEliminatedCount - a.babiesEliminatedCount ||
+      b.score - a.score ||
+      a.timeMs - b.timeMs
+    );
+  }
+  const aTenth = Math.floor(a.timeMs / 100);
+  const bTenth = Math.floor(b.timeMs / 100);
+  if (objectiveMode === 'target_kills') {
+    // Quota X ratti: fastest time first; on tie, MORE baby rats killed wins!
+    return (
+      aTenth - bTenth ||
+      b.babiesEliminatedCount - a.babiesEliminatedCount ||
+      b.score - a.score ||
+      a.timeMs - b.timeMs
+    );
+  }
+  // Sterminio: fastest time first; on tie, FEWER total rats killed wins (births prevented)!
+  return (
+    aTenth - bTenth ||
+    a.eliminatedCount - b.eliminatedCount ||
+    b.score - a.score ||
+    a.timeMs - b.timeMs
+  );
+}
+
+export function makeStorySummaryKey(levelId: number, difficulty: DifficultyLevel): string {
+  const cleanLvlId = Math.max(1, Math.min(30, Math.round(levelId)));
+  const cleanDiff: DifficultyLevel = VALID_DIFFS.has(difficulty) ? difficulty : 'normal';
+  return `${cleanLvlId}_${cleanDiff}`;
+}
+
 function parseCommunityLevelDoc(id: string, data: Record<string, unknown>): CommunityLevelDoc | null {
   try {
     const biome = typeof data.biome === 'string' && VALID_BIOMES.has(data.biome as BiomeType)
@@ -53,6 +105,19 @@ function parseCommunityLevelDoc(id: string, data: Record<string, unknown>): Comm
     const difficulty = typeof data.difficulty === 'string' && VALID_DIFFS.has(data.difficulty as DifficultyLevel)
       ? (data.difficulty as DifficultyLevel)
       : 'normal';
+    const objectiveMode =
+      typeof data.objectiveMode === 'string' && VALID_OBJECTIVES.has(data.objectiveMode as GameObjectiveMode)
+        ? (data.objectiveMode as GameObjectiveMode)
+        : 'eradication';
+    const targetDurationSec = Math.max(
+      60,
+      Math.min(600, Math.round(Number(data.targetDurationSec ?? 180))),
+    );
+    const targetKills = Math.max(
+      10,
+      Math.min(500, Math.round(Number(data.targetKills ?? 40))),
+    );
+
     const layout = Array.isArray(data.layout)
       ? data.layout.filter((r): r is string => typeof r === 'string')
       : [];
@@ -96,6 +161,9 @@ function parseCommunityLevelDoc(id: string, data: Record<string, unknown>): Comm
       customWallColor: cleanHexOrEmpty(typeof data.customWallColor === 'string' ? data.customWallColor : ''),
       customFloorColor: cleanHexOrEmpty(typeof data.customFloorColor === 'string' ? data.customFloorColor : ''),
       difficulty,
+      objectiveMode,
+      targetDurationSec,
+      targetKills,
       criticalLimit: Math.max(30, Math.min(250, Math.round(Number(data.criticalLimit ?? 65)))),
       ratSpeed: typeof data.ratSpeed === 'number' ? data.ratSpeed : defaults.ratSpeed,
       breedCooldown: typeof data.breedCooldown === 'number' ? data.breedCooldown : defaults.breedCooldown,
@@ -104,6 +172,9 @@ function parseCommunityLevelDoc(id: string, data: Record<string, unknown>): Comm
       initialRats,
       isPublished: Boolean(data.isPublished),
       bestTimeMs: Math.max(0, Math.round(Number(data.bestTimeMs ?? 0))),
+      bestScore: Math.max(0, Math.round(Number(data.bestScore ?? 0))),
+      bestEliminatedCount: Math.max(0, Math.round(Number(data.bestEliminatedCount ?? 0))),
+      bestBabiesEliminatedCount: Math.max(0, Math.round(Number(data.bestBabiesEliminatedCount ?? 0))),
       bestPlayerName: typeof data.bestPlayerName === 'string' ? data.bestPlayerName.slice(0, 24) : '',
       playCount: Math.max(0, Math.round(Number(data.playCount ?? 0))),
       createdAtMs: toTimestampMs(data.createdAt),
@@ -164,6 +235,9 @@ export interface PublishLevelInput {
   customWallColor: string;
   customFloorColor: string;
   difficulty: DifficultyLevel;
+  objectiveMode: GameObjectiveMode;
+  targetDurationSec: number;
+  targetKills: number;
   criticalLimit: number;
   layout: string[];
   tunnels: CommunityTunnelDraft[];
@@ -207,6 +281,7 @@ export async function publishCommunityLevel(
   }
 
   const defaults = getCreatorDifficultyDefaults(input.difficulty);
+  const cleanObjective = VALID_OBJECTIVES.has(input.objectiveMode) ? input.objectiveMode : 'eradication';
   const payload = {
     title: cleanTitle,
     description: cleanDesc,
@@ -216,6 +291,9 @@ export async function publishCommunityLevel(
     customWallColor: cleanHexOrEmpty(input.customWallColor),
     customFloorColor: cleanHexOrEmpty(input.customFloorColor),
     difficulty: VALID_DIFFS.has(input.difficulty) ? input.difficulty : 'normal',
+    objectiveMode: cleanObjective,
+    targetDurationSec: Math.max(60, Math.min(600, Math.round(input.targetDurationSec || 180))),
+    targetKills: Math.max(10, Math.min(500, Math.round(input.targetKills || 40))),
     criticalLimit: Math.max(30, Math.min(250, Math.round(input.criticalLimit))),
     ratSpeed: defaults.ratSpeed,
     breedCooldown: defaults.breedCooldown,
@@ -224,6 +302,9 @@ export async function publishCommunityLevel(
     initialRats: cleanRats,
     isPublished: true,
     bestTimeMs: 0,
+    bestScore: 0,
+    bestEliminatedCount: 0,
+    bestBabiesEliminatedCount: 0,
     bestPlayerName: '',
     playCount: 0,
     createdAt: serverTimestamp(),
@@ -247,7 +328,10 @@ export async function deleteCommunityLevel(levelId: string): Promise<void> {
   }
 }
 
-export async function fetchLevelLeaderboard(levelId: string): Promise<LevelRunDoc[]> {
+export async function fetchLevelLeaderboard(
+  levelId: string,
+  objectiveMode: GameObjectiveMode = 'eradication',
+): Promise<LevelRunDoc[]> {
   const path = `${LEVELS_COLLECTION}/${levelId}/runs`;
   try {
     const q = query(
@@ -264,11 +348,13 @@ export async function fetchLevelLeaderboard(levelId: string): Promise<LevelRunDo
         levelId,
         playerName: typeof data.playerName === 'string' ? data.playerName.slice(0, 24) : 'Player',
         timeMs: Math.max(1000, Math.round(Number(data.timeMs ?? 1000))),
+        score: Math.max(0, Math.round(Number(data.score ?? 0))),
         eliminatedCount: Math.max(0, Math.round(Number(data.eliminatedCount ?? 0))),
+        babiesEliminatedCount: Math.max(0, Math.round(Number(data.babiesEliminatedCount ?? 0))),
         bornCount: Math.max(0, Math.round(Number(data.bornCount ?? 0))),
       });
     });
-    list.sort((a, b) => a.timeMs - b.timeMs);
+    list.sort((a, b) => compareRunsByObjective(objectiveMode, a, b));
     return list.slice(0, 20);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
@@ -278,7 +364,9 @@ export async function fetchLevelLeaderboard(levelId: string): Promise<LevelRunDo
 export async function submitCommunityRun(
   levelId: string,
   elapsedSeconds: number,
+  score: number,
   eliminatedCount: number,
+  babiesEliminatedCount: number,
   bornCount: number,
   user: User,
   nickname: string,
@@ -286,10 +374,14 @@ export async function submitCommunityRun(
   isNewWorldRecord: boolean;
   isNewPersonalBest: boolean;
   recordedTimeMs: number;
+  recordedScore: number;
+  recordedEliminatedCount: number;
 }> {
   const cleanName = (nickname.trim() || user.displayName || 'Player').slice(0, 24);
   const runTimeMs = Math.max(1000, Math.min(36000000, Math.round(elapsedSeconds * 1000)));
+  const cleanScore = Math.max(0, Math.min(1000000, Math.round(score)));
   const cleanElim = Math.max(0, Math.min(10000, Math.round(eliminatedCount)));
+  const cleanBabies = Math.max(0, Math.min(10000, Math.round(babiesEliminatedCount)));
   const cleanBorn = Math.max(0, Math.min(10000, Math.round(bornCount)));
 
   const levelRef = doc(db, LEVELS_COLLECTION, levelId);
@@ -309,17 +401,53 @@ export async function submitCommunityRun(
     throw new Error('Community level no longer exists.');
   }
   const levelData = levelSnap.data() as Record<string, unknown>;
+  const objectiveMode: GameObjectiveMode =
+    typeof levelData.objectiveMode === 'string' && VALID_OBJECTIVES.has(levelData.objectiveMode as GameObjectiveMode)
+      ? (levelData.objectiveMode as GameObjectiveMode)
+      : 'eradication';
+
   const currentBestMs = Math.max(0, Math.round(Number(levelData.bestTimeMs ?? 0)));
+  const currentBestScore = Math.max(0, Math.round(Number(levelData.bestScore ?? 0)));
+  const hasBestElimField = 'bestEliminatedCount' in levelData;
+  const currentBestElim = Math.max(0, Math.round(Number(levelData.bestEliminatedCount ?? 0)));
+  const currentBestBabies = Math.max(0, Math.round(Number(levelData.bestBabiesEliminatedCount ?? 0)));
   const currentBestName = typeof levelData.bestPlayerName === 'string' ? levelData.bestPlayerName : '';
   const currentPlays = Math.max(0, Math.round(Number(levelData.playCount ?? 0)));
 
-  const prevRunTimeMs = existingRunSnap.exists()
-    ? Math.max(1000, Math.round(Number((existingRunSnap.data() as Record<string, unknown>).timeMs ?? runTimeMs)))
+  const candidate: ComparableRun = {
+    timeMs: runTimeMs,
+    score: cleanScore,
+    eliminatedCount: cleanElim,
+    babiesEliminatedCount: cleanBabies,
+  };
+
+  const prevData = existingRunSnap.exists() ? (existingRunSnap.data() as Record<string, unknown>) : null;
+  const prevComparable: ComparableRun | null = prevData
+    ? {
+        timeMs: Math.max(1000, Math.round(Number(prevData.timeMs ?? runTimeMs))),
+        score: Math.max(0, Math.round(Number(prevData.score ?? 0))),
+        eliminatedCount: Math.max(0, Math.round(Number(prevData.eliminatedCount ?? 0))),
+        babiesEliminatedCount: Math.max(0, Math.round(Number(prevData.babiesEliminatedCount ?? 0))),
+      }
     : null;
 
-  const isNewPersonalBest = prevRunTimeMs === null || runTimeMs < prevRunTimeMs;
-  const bestPersonalMs = prevRunTimeMs === null ? runTimeMs : Math.min(prevRunTimeMs, runTimeMs);
-  const isNewWorldRecord = currentBestMs === 0 || runTimeMs < currentBestMs;
+  const isNewPersonalBest =
+    prevComparable === null || compareRunsByObjective(objectiveMode, candidate, prevComparable) < 0;
+
+  let isNewWorldRecord = false;
+  if (currentBestMs === 0 && currentBestScore === 0 && currentBestElim === 0) {
+    isNewWorldRecord = true;
+  } else if (objectiveMode === 'survival' && !hasBestElimField) {
+    isNewWorldRecord = cleanElim > 0 || cleanScore > currentBestScore;
+  } else {
+    const worldIncumbent: ComparableRun = {
+      timeMs: currentBestMs > 0 ? currentBestMs : 36000000,
+      score: currentBestScore,
+      eliminatedCount: !hasBestElimField && objectiveMode === 'eradication' ? 999999 : currentBestElim,
+      babiesEliminatedCount: currentBestBabies,
+    };
+    isNewWorldRecord = compareRunsByObjective(objectiveMode, candidate, worldIncumbent) < 0;
+  }
 
   const batch = writeBatch(db);
   if (!existingRunSnap.exists()) {
@@ -328,7 +456,9 @@ export async function submitCommunityRun(
       runnerId: user.uid,
       playerName: cleanName,
       timeMs: runTimeMs,
+      score: cleanScore,
       eliminatedCount: cleanElim,
+      babiesEliminatedCount: cleanBabies,
       bornCount: cleanBorn,
       isPublic: true,
       createdAt: serverTimestamp(),
@@ -337,13 +467,13 @@ export async function submitCommunityRun(
   } else {
     batch.update(runRef, {
       playerName: cleanName,
-      timeMs: bestPersonalMs,
-      eliminatedCount: isNewPersonalBest
-        ? cleanElim
-        : Math.max(0, Math.round(Number((existingRunSnap.data() as Record<string, unknown>).eliminatedCount ?? cleanElim))),
+      timeMs: isNewPersonalBest ? runTimeMs : prevComparable!.timeMs,
+      score: isNewPersonalBest ? cleanScore : prevComparable!.score,
+      eliminatedCount: isNewPersonalBest ? cleanElim : prevComparable!.eliminatedCount,
+      babiesEliminatedCount: isNewPersonalBest ? cleanBabies : prevComparable!.babiesEliminatedCount,
       bornCount: isNewPersonalBest
         ? cleanBorn
-        : Math.max(0, Math.round(Number((existingRunSnap.data() as Record<string, unknown>).bornCount ?? cleanBorn))),
+        : Math.max(0, Math.round(Number(prevData?.bornCount ?? cleanBorn))),
       updatedAt: serverTimestamp(),
     });
   }
@@ -351,6 +481,9 @@ export async function submitCommunityRun(
   batch.update(levelRef, {
     playCount: currentPlays + 1,
     bestTimeMs: isNewWorldRecord ? runTimeMs : currentBestMs,
+    bestScore: isNewWorldRecord ? cleanScore : currentBestScore,
+    bestEliminatedCount: isNewWorldRecord ? cleanElim : currentBestElim,
+    bestBabiesEliminatedCount: isNewWorldRecord ? cleanBabies : currentBestBabies,
     bestPlayerName: isNewWorldRecord ? cleanName : currentBestName,
     updatedAt: serverTimestamp(),
   });
@@ -365,6 +498,256 @@ export async function submitCommunityRun(
     isNewWorldRecord,
     isNewPersonalBest,
     recordedTimeMs: runTimeMs,
+    recordedScore: cleanScore,
+    recordedEliminatedCount: cleanElim,
+  };
+}
+
+// =============================================================================
+// Story Mode Official Leaderboards (/story_levels/{levelId}_{difficulty} & /runs/{runnerId})
+// =============================================================================
+
+export function subscribeStoryLevelSummaries(
+  onSummaries: (map: Record<string, StoryLevelSummary>) => void,
+  onError?: (err: unknown) => void,
+): Unsubscribe {
+  const q = query(
+    collection(db, STORY_LEVELS_COLLECTION),
+    where('isPublic', '==', true),
+    limit(100),
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const next: Record<string, StoryLevelSummary> = {};
+      snap.forEach((d) => {
+        const data = d.data() as Record<string, unknown>;
+        const lid = Math.round(Number(data.levelId ?? 0));
+        const diff =
+          typeof data.difficulty === 'string' && VALID_DIFFS.has(data.difficulty as DifficultyLevel)
+            ? (data.difficulty as DifficultyLevel)
+            : null;
+        if (lid >= 1 && lid <= 30 && diff) {
+          const key = makeStorySummaryKey(lid, diff);
+          next[key] = {
+            levelId: lid,
+            difficulty: diff,
+            bestTimeMs: Math.max(0, Math.round(Number(data.bestTimeMs ?? 0))),
+            bestScore: Math.max(0, Math.round(Number(data.bestScore ?? 0))),
+            bestEliminatedCount: Math.max(0, Math.round(Number(data.bestEliminatedCount ?? 0))),
+            bestBabiesEliminatedCount: Math.max(0, Math.round(Number(data.bestBabiesEliminatedCount ?? 0))),
+            bestPlayerName: typeof data.bestPlayerName === 'string' ? data.bestPlayerName.slice(0, 24) : '',
+            playCount: Math.max(0, Math.round(Number(data.playCount ?? 0))),
+          };
+        }
+      });
+      onSummaries(next);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, STORY_LEVELS_COLLECTION);
+      } catch (wrapped) {
+        if (onError) onError(wrapped);
+      }
+    },
+  );
+}
+
+export async function fetchStoryLeaderboard(
+  levelId: number,
+  difficulty: DifficultyLevel,
+  objectiveMode: GameObjectiveMode,
+): Promise<StoryRunDoc[]> {
+  const summaryId = makeStorySummaryKey(levelId, difficulty);
+  const path = `${STORY_LEVELS_COLLECTION}/${summaryId}/runs`;
+  try {
+    const q = query(
+      collection(db, STORY_LEVELS_COLLECTION, summaryId, 'runs'),
+      where('isPublic', '==', true),
+      limit(100),
+    );
+    const snap = await getDocs(q);
+    const list: StoryRunDoc[] = [];
+    snap.forEach((d) => {
+      const data = d.data() as Record<string, unknown>;
+      const diff =
+        typeof data.difficulty === 'string' && VALID_DIFFS.has(data.difficulty as DifficultyLevel)
+          ? (data.difficulty as DifficultyLevel)
+          : difficulty;
+      const mode =
+        typeof data.objectiveMode === 'string' && VALID_OBJECTIVES.has(data.objectiveMode as GameObjectiveMode)
+          ? (data.objectiveMode as GameObjectiveMode)
+          : objectiveMode;
+      list.push({
+        runnerId: typeof data.runnerId === 'string' ? data.runnerId : d.id,
+        levelId,
+        playerName: typeof data.playerName === 'string' ? data.playerName.slice(0, 24) : 'Player',
+        difficulty: diff,
+        objectiveMode: mode,
+        timeMs: Math.max(1000, Math.round(Number(data.timeMs ?? 1000))),
+        score: Math.max(0, Math.round(Number(data.score ?? 0))),
+        eliminatedCount: Math.max(0, Math.round(Number(data.eliminatedCount ?? 0))),
+        babiesEliminatedCount: Math.max(0, Math.round(Number(data.babiesEliminatedCount ?? 0))),
+        bornCount: Math.max(0, Math.round(Number(data.bornCount ?? 0))),
+      });
+    });
+    list.sort((a, b) => compareRunsByObjective(objectiveMode, a, b));
+    return list.slice(0, 20);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function submitStoryRun(
+  levelId: number,
+  difficulty: DifficultyLevel,
+  objectiveMode: GameObjectiveMode,
+  elapsedSeconds: number,
+  score: number,
+  eliminatedCount: number,
+  babiesEliminatedCount: number,
+  bornCount: number,
+  user: User,
+  nickname: string,
+): Promise<{
+  isNewWorldRecord: boolean;
+  isNewPersonalBest: boolean;
+  recordedTimeMs: number;
+  recordedScore: number;
+  recordedEliminatedCount: number;
+}> {
+  const cleanLvlId = Math.max(1, Math.min(30, Math.round(levelId)));
+  const cleanDiff: DifficultyLevel = VALID_DIFFS.has(difficulty) ? difficulty : 'normal';
+  const summaryId = makeStorySummaryKey(cleanLvlId, cleanDiff);
+  const cleanName = (nickname.trim() || user.displayName || 'Player').slice(0, 24);
+  const runTimeMs = Math.max(1000, Math.min(36000000, Math.round(elapsedSeconds * 1000)));
+  const cleanScore = Math.max(0, Math.min(1000000, Math.round(score)));
+  const cleanElim = Math.max(0, Math.min(10000, Math.round(eliminatedCount)));
+  const cleanBabies = Math.max(0, Math.min(10000, Math.round(babiesEliminatedCount)));
+  const cleanBorn = Math.max(0, Math.min(10000, Math.round(bornCount)));
+
+  const summaryRef = doc(db, STORY_LEVELS_COLLECTION, summaryId);
+  const runRef = doc(db, STORY_LEVELS_COLLECTION, summaryId, 'runs', user.uid);
+  const summaryPath = `${STORY_LEVELS_COLLECTION}/${summaryId}`;
+  const runPath = `${STORY_LEVELS_COLLECTION}/${summaryId}/runs/${user.uid}`;
+
+  let summarySnap;
+  let existingRunSnap;
+  try {
+    [summarySnap, existingRunSnap] = await Promise.all([getDoc(summaryRef), getDoc(runRef)]);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, summaryPath);
+  }
+
+  const candidate: ComparableRun = {
+    timeMs: runTimeMs,
+    score: cleanScore,
+    eliminatedCount: cleanElim,
+    babiesEliminatedCount: cleanBabies,
+  };
+
+  const summaryData = summarySnap.exists() ? (summarySnap.data() as Record<string, unknown>) : null;
+  const currentBestMs = summaryData ? Math.max(0, Math.round(Number(summaryData.bestTimeMs ?? 0))) : 0;
+  const currentBestScore = summaryData ? Math.max(0, Math.round(Number(summaryData.bestScore ?? 0))) : 0;
+  const currentBestElim = summaryData ? Math.max(0, Math.round(Number(summaryData.bestEliminatedCount ?? 0))) : 0;
+  const currentBestBabies = summaryData
+    ? Math.max(0, Math.round(Number(summaryData.bestBabiesEliminatedCount ?? 0)))
+    : 0;
+  const currentBestName = summaryData && typeof summaryData.bestPlayerName === 'string' ? summaryData.bestPlayerName : '';
+  const currentPlays = summaryData ? Math.max(0, Math.round(Number(summaryData.playCount ?? 0))) : 0;
+
+  const prevData = existingRunSnap.exists() ? (existingRunSnap.data() as Record<string, unknown>) : null;
+  const prevComparable: ComparableRun | null = prevData
+    ? {
+        timeMs: Math.max(1000, Math.round(Number(prevData.timeMs ?? runTimeMs))),
+        score: Math.max(0, Math.round(Number(prevData.score ?? 0))),
+        eliminatedCount: Math.max(0, Math.round(Number(prevData.eliminatedCount ?? 0))),
+        babiesEliminatedCount: Math.max(0, Math.round(Number(prevData.babiesEliminatedCount ?? 0))),
+      }
+    : null;
+
+  const isNewPersonalBest =
+    prevComparable === null || compareRunsByObjective(objectiveMode, candidate, prevComparable) < 0;
+
+  const isNewWorldRecord = !summarySnap.exists()
+    ? true
+    : compareRunsByObjective(objectiveMode, candidate, {
+        timeMs: currentBestMs > 0 ? currentBestMs : 36000000,
+        score: currentBestScore,
+        eliminatedCount: currentBestElim,
+        babiesEliminatedCount: currentBestBabies,
+      }) < 0;
+
+  const batch = writeBatch(db);
+  if (!summarySnap.exists()) {
+    batch.set(summaryRef, {
+      levelId: cleanLvlId,
+      difficulty: cleanDiff,
+      isPublic: true,
+      bestTimeMs: runTimeMs,
+      bestScore: cleanScore,
+      bestEliminatedCount: cleanElim,
+      bestBabiesEliminatedCount: cleanBabies,
+      bestPlayerName: cleanName,
+      playCount: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(summaryRef, {
+      playCount: currentPlays + 1,
+      bestTimeMs: isNewWorldRecord ? runTimeMs : currentBestMs,
+      bestScore: isNewWorldRecord ? cleanScore : currentBestScore,
+      bestEliminatedCount: isNewWorldRecord ? cleanElim : currentBestElim,
+      bestBabiesEliminatedCount: isNewWorldRecord ? cleanBabies : currentBestBabies,
+      bestPlayerName: isNewWorldRecord ? cleanName : currentBestName,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  if (!existingRunSnap.exists()) {
+    batch.set(runRef, {
+      levelId: cleanLvlId,
+      runnerId: user.uid,
+      playerName: cleanName,
+      difficulty: cleanDiff,
+      objectiveMode,
+      timeMs: runTimeMs,
+      score: cleanScore,
+      eliminatedCount: cleanElim,
+      babiesEliminatedCount: cleanBabies,
+      bornCount: cleanBorn,
+      isPublic: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(runRef, {
+      playerName: cleanName,
+      difficulty: cleanDiff,
+      timeMs: isNewPersonalBest ? runTimeMs : prevComparable!.timeMs,
+      score: isNewPersonalBest ? cleanScore : prevComparable!.score,
+      eliminatedCount: isNewPersonalBest ? cleanElim : prevComparable!.eliminatedCount,
+      babiesEliminatedCount: isNewPersonalBest ? cleanBabies : prevComparable!.babiesEliminatedCount,
+      bornCount: isNewPersonalBest
+        ? cleanBorn
+        : Math.max(0, Math.round(Number(prevData?.bornCount ?? cleanBorn))),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, runPath);
+  }
+
+  return {
+    isNewWorldRecord,
+    isNewPersonalBest,
+    recordedTimeMs: runTimeMs,
+    recordedScore: cleanScore,
+    recordedEliminatedCount: cleanElim,
   };
 }
 
@@ -376,3 +759,11 @@ export function formatRunTime(ms: number): string {
   const tenths = Math.floor((ms % 1000) / 100);
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${tenths}`;
 }
+
+export function formatCountdownSec(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const mins = Math.floor(clamped / 60);
+  const secs = clamped % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+

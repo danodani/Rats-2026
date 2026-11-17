@@ -49,6 +49,19 @@
           "enum": ["easy", "normal", "hard"],
           "description": "Locked difficulty preset chosen by the creator."
         },
+        "objectiveMode": {
+          "type": "string",
+          "enum": ["eradication", "survival", "target_kills"],
+          "description": "Win condition mode chosen by the creator."
+        },
+        "targetDurationSec": {
+          "type": "integer",
+          "description": "Survival countdown duration in seconds (60-600)."
+        },
+        "targetKills": {
+          "type": "integer",
+          "description": "Target rat extermination quota (10-500)."
+        },
         "criticalLimit": {
           "type": "integer",
           "description": "Maximum rat population before overcrowding defeat (30-250)."
@@ -81,10 +94,22 @@
           "type": "integer",
           "description": "Fastest recorded completion time in milliseconds (0 if uncompleted)."
         },
+        "bestScore": {
+          "type": "integer",
+          "description": "Highest recorded score for survival mode (0 if uncompleted)."
+        },
+        "bestEliminatedCount": {
+          "type": "integer",
+          "description": "Eliminated rat count from the record run (primary metric for survival; tie-breaker for eradication)."
+        },
+        "bestBabiesEliminatedCount": {
+          "type": "integer",
+          "description": "Baby rats eliminated during the record run (tie-breaker for target_kills)."
+        },
         "bestPlayerName": {
           "type": "string",
           "maxLength": 24,
-          "description": "Display nickname of the fastest player."
+          "description": "Display nickname of the record holder."
         },
         "playCount": {
           "type": "integer",
@@ -110,6 +135,9 @@
         "customWallColor",
         "customFloorColor",
         "difficulty",
+        "objectiveMode",
+        "targetDurationSec",
+        "targetKills",
         "criticalLimit",
         "ratSpeed",
         "breedCooldown",
@@ -118,6 +146,9 @@
         "initialRats",
         "isPublished",
         "bestTimeMs",
+        "bestScore",
+        "bestEliminatedCount",
+        "bestBabiesEliminatedCount",
         "bestPlayerName",
         "playCount",
         "createdAt",
@@ -126,7 +157,7 @@
     },
     "LevelRun": {
       "title": "LevelRun",
-      "description": "Personal best completion time for a player on a specific community level.",
+      "description": "Personal best completion run for a player on a specific community level.",
       "type": "object",
       "properties": {
         "levelId": {
@@ -153,9 +184,17 @@
           "type": "integer",
           "description": "Completion time in milliseconds (min 1000)."
         },
+        "score": {
+          "type": "integer",
+          "description": "Run score (0-1000000)."
+        },
         "eliminatedCount": {
           "type": "integer",
-          "description": "Rats eliminated during the record run."
+          "description": "Total rats eliminated during the record run."
+        },
+        "babiesEliminatedCount": {
+          "type": "integer",
+          "description": "Baby rats eliminated during the record run (tie-breaker for target_kills)."
         },
         "bornCount": {
           "type": "integer",
@@ -181,7 +220,161 @@
         "runnerId",
         "playerName",
         "timeMs",
+        "score",
         "eliminatedCount",
+        "babiesEliminatedCount",
+        "bornCount",
+        "isPublic",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoryLevelSummary": {
+      "title": "StoryLevelSummary",
+      "description": "Public leaderboard summary record per (levelId, difficulty) for an official Story Mode level (1-30).",
+      "type": "object",
+      "properties": {
+        "levelId": {
+          "type": "integer",
+          "description": "Story level number (1-30)."
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "normal", "hard"],
+          "description": "Difficulty tier isolated for this Story leaderboard."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Public visibility flag for listing Story summaries."
+        },
+        "bestTimeMs": {
+          "type": "integer",
+          "description": "Fastest recorded completion time in milliseconds."
+        },
+        "bestScore": {
+          "type": "integer",
+          "description": "Highest recorded score."
+        },
+        "bestEliminatedCount": {
+          "type": "integer",
+          "description": "Eliminated rat count of the current Story record run."
+        },
+        "bestBabiesEliminatedCount": {
+          "type": "integer",
+          "description": "Baby rats eliminated in the current Story record run."
+        },
+        "bestPlayerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Nickname of the current Story record holder."
+        },
+        "playCount": {
+          "type": "integer",
+          "description": "Total recorded Story clears for this level & difficulty."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "levelId",
+        "difficulty",
+        "isPublic",
+        "bestTimeMs",
+        "bestScore",
+        "bestEliminatedCount",
+        "bestBabiesEliminatedCount",
+        "bestPlayerName",
+        "playCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoryRun": {
+      "title": "StoryRun",
+      "description": "Personal best official leaderboard run for a player on a Story Mode (levelId, difficulty).",
+      "type": "object",
+      "properties": {
+        "levelId": {
+          "type": "integer",
+          "description": "Story level number (1-30)."
+        },
+        "runnerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the player."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Public display nickname of the player."
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "normal", "hard"],
+          "description": "Difficulty preset used on the record run."
+        },
+        "objectiveMode": {
+          "type": "string",
+          "enum": ["eradication", "survival", "target_kills"],
+          "description": "Objective mode of the Story level."
+        },
+        "timeMs": {
+          "type": "integer",
+          "description": "Completion time in milliseconds (min 1000)."
+        },
+        "score": {
+          "type": "integer",
+          "description": "Run score (0-1000000)."
+        },
+        "eliminatedCount": {
+          "type": "integer",
+          "description": "Rats eliminated during the record run."
+        },
+        "babiesEliminatedCount": {
+          "type": "integer",
+          "description": "Baby rats eliminated during the record run."
+        },
+        "bornCount": {
+          "type": "integer",
+          "description": "Rats born during the record run."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Public visibility flag for leaderboard listing."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "levelId",
+        "runnerId",
+        "playerName",
+        "difficulty",
+        "objectiveMode",
+        "timeMs",
+        "score",
+        "eliminatedCount",
+        "babiesEliminatedCount",
         "bornCount",
         "isPublic",
         "createdAt",
@@ -200,7 +393,19 @@
       "schema": {
         "$ref": "#/entities/LevelRun"
       },
-      "description": "Personal best completion time entries for each community level."
+      "description": "Personal best completion runs for each community level."
+    },
+    "/story_levels/{summaryId}": {
+      "schema": {
+        "$ref": "#/entities/StoryLevelSummary"
+      },
+      "description": "Official Story Mode per-level and per-difficulty ({levelId}_{difficulty}) record summaries."
+    },
+    "/story_levels/{summaryId}/runs/{runnerId}": {
+      "schema": {
+        "$ref": "#/entities/StoryRun"
+      },
+      "description": "Personal best Story Mode leaderboard runs isolated per level and difficulty."
     }
   }
 }

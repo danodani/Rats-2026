@@ -66,6 +66,8 @@ export type RatSex = 'M' | 'F';
 
 export type GameStatus = 'playing' | 'paused' | 'won' | 'lost';
 
+export type GameObjectiveMode = 'eradication' | 'survival' | 'target_kills';
+
 export interface ToolMeta {
   id: ToolType;
   name: string;
@@ -207,6 +209,9 @@ export interface LevelConfig {
   name: string;
   subtitle: string;
   biome: BiomeType;
+  objectiveMode?: GameObjectiveMode;
+  targetDurationSec?: number;
+  targetKills?: number;
   customWallColor?: string;
   customFloorColor?: string;
   isCommunity?: boolean;
@@ -243,6 +248,9 @@ export interface CommunityLevelDoc {
   customWallColor: string;
   customFloorColor: string;
   difficulty: DifficultyLevel;
+  objectiveMode: GameObjectiveMode;
+  targetDurationSec: number;
+  targetKills: number;
   criticalLimit: number;
   ratSpeed: number;
   breedCooldown: number;
@@ -251,6 +259,9 @@ export interface CommunityLevelDoc {
   initialRats: Array<{ col: number; row: number; sex: RatSex }>;
   isPublished: boolean;
   bestTimeMs: number;
+  bestScore: number;
+  bestEliminatedCount: number;
+  bestBabiesEliminatedCount: number;
   bestPlayerName: string;
   playCount: number;
   createdAtMs: number;
@@ -261,7 +272,33 @@ export interface LevelRunDoc {
   levelId: string;
   playerName: string;
   timeMs: number;
+  score: number;
   eliminatedCount: number;
+  babiesEliminatedCount: number;
+  bornCount: number;
+}
+
+export interface StoryLevelSummary {
+  levelId: number;
+  difficulty: DifficultyLevel;
+  bestTimeMs: number;
+  bestScore: number;
+  bestEliminatedCount: number;
+  bestBabiesEliminatedCount: number;
+  bestPlayerName: string;
+  playCount: number;
+}
+
+export interface StoryRunDoc {
+  runnerId: string;
+  levelId: number;
+  playerName: string;
+  difficulty: DifficultyLevel;
+  objectiveMode: GameObjectiveMode;
+  timeMs: number;
+  score: number;
+  eliminatedCount: number;
+  babiesEliminatedCount: number;
   bornCount: number;
 }
 
@@ -281,6 +318,11 @@ export interface GameSnapshot {
   levelName: string;
   biome: BiomeType;
   difficulty: DifficultyLevel;
+  objectiveMode: GameObjectiveMode;
+  targetDurationSec?: number;
+  targetKills?: number;
+  survivalRemainingSec?: number;
+  score: number;
   isCommunity?: boolean;
   communityId?: string;
   status: GameStatus;
@@ -293,6 +335,7 @@ export interface GameSnapshot {
   totalRats: number;
   criticalLimit: number;
   eliminatedCount: number;
+  babiesEliminatedCount: number;
   bornCount: number;
   elapsedSeconds: number;
   regenSpeedBonus: number;

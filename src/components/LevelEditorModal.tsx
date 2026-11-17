@@ -20,6 +20,7 @@ import type {
   BiomeType,
   CommunityTunnelDraft,
   DifficultyLevel,
+  GameObjectiveMode,
   LevelConfig,
   RatSex,
 } from '../game/types';
@@ -128,6 +129,9 @@ export const LevelEditorModal: React.FC<LevelEditorModalProps> = ({
   const [customWallColor, setCustomWallColor] = useState('#289e28');
   const [customFloorColor, setCustomFloorColor] = useState('#6e7073');
   const [difficulty, setDifficulty] = useState<DifficultyLevel>('normal');
+  const [objectiveMode, setObjectiveMode] = useState<GameObjectiveMode>('eradication');
+  const [targetDurationSec, setTargetDurationSec] = useState<number>(180);
+  const [targetKills, setTargetKills] = useState<number>(40);
   const [criticalLimit, setCriticalLimit] = useState(65);
 
   const [grid, setGrid] = useState<string[][]>(() =>
@@ -462,6 +466,9 @@ export const LevelEditorModal: React.FC<LevelEditorModalProps> = ({
       name: title.trim() || 'Test Map',
       subtitle: description.trim(),
       biome,
+      objectiveMode,
+      targetDurationSec: objectiveMode === 'survival' ? targetDurationSec : undefined,
+      targetKills: objectiveMode === 'target_kills' ? targetKills : undefined,
       customWallColor: useCustomColors ? customWallColor : undefined,
       customFloorColor: useCustomColors ? customFloorColor : undefined,
       isCommunity: true,
@@ -507,6 +514,9 @@ export const LevelEditorModal: React.FC<LevelEditorModalProps> = ({
           customWallColor: useCustomColors ? customWallColor : '',
           customFloorColor: useCustomColors ? customFloorColor : '',
           difficulty,
+          objectiveMode,
+          targetDurationSec,
+          targetKills,
           criticalLimit,
           layout: grid.map((row) => row.join('')),
           tunnels,
@@ -911,6 +921,86 @@ export const LevelEditorModal: React.FC<LevelEditorModalProps> = ({
                   onChange={(e) => setCriticalLimit(Number(e.target.value))}
                   className="w-full accent-amber-400"
                 />
+              </div>
+
+              {/* Objective Mode Selector */}
+              <div className="pt-2 border-t border-white/10 space-y-2">
+                <div className="text-xs font-medium text-slate-200">{t.editorObjectiveLabel}</div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setObjectiveMode('eradication')}
+                    className={`min-h-[36px] px-1.5 rounded-lg border text-[11px] font-bold transition truncate ${
+                      objectiveMode === 'eradication'
+                        ? 'bg-sky-500/25 border-sky-400 text-white'
+                        : 'bg-slate-950/70 border-white/10 text-slate-400'
+                    }`}
+                  >
+                    {t.modeEradicationName}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setObjectiveMode('survival')}
+                    className={`min-h-[36px] px-1.5 rounded-lg border text-[11px] font-bold transition truncate ${
+                      objectiveMode === 'survival'
+                        ? 'bg-amber-500/25 border-amber-400 text-white'
+                        : 'bg-slate-950/70 border-white/10 text-slate-400'
+                    }`}
+                  >
+                    {t.modeSurvivalName(targetDurationSec)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setObjectiveMode('target_kills')}
+                    className={`min-h-[36px] px-1.5 rounded-lg border text-[11px] font-bold transition truncate ${
+                      objectiveMode === 'target_kills'
+                        ? 'bg-emerald-500/25 border-emerald-400 text-white'
+                        : 'bg-slate-950/70 border-white/10 text-slate-400'
+                    }`}
+                  >
+                    {t.modeQuotaName(targetKills)}
+                  </button>
+                </div>
+
+                {objectiveMode === 'survival' && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">{t.editorDurationLabel}</span>
+                    <div className="flex items-center gap-1">
+                      {[120, 180, 240].map((sec) => (
+                        <button
+                          key={sec}
+                          type="button"
+                          onClick={() => setTargetDurationSec(sec)}
+                          className={`px-2 py-1 rounded text-[11px] font-mono-nums font-bold border transition ${
+                            targetDurationSec === sec
+                              ? 'bg-amber-500 border-amber-400 text-slate-950'
+                              : 'bg-slate-950 border-white/10 text-slate-300'
+                          }`}
+                        >
+                          {Math.floor(sec / 60)}:00
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {objectiveMode === 'target_kills' && (
+                  <div>
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="text-slate-400">{t.editorTargetKillsLabel}</span>
+                      <span className="font-mono-nums font-bold text-emerald-300">{targetKills}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={20}
+                      max={120}
+                      step={5}
+                      value={targetKills}
+                      onChange={(e) => setTargetKills(Number(e.target.value))}
+                      className="w-full accent-emerald-400"
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </div>

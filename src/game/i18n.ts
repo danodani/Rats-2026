@@ -214,6 +214,32 @@ export interface TranslationPack {
   editorValidationName: string;
   editorValidationRats: string;
   editorValidationFloor: string;
+  modeEradicationName: string;
+  modeSurvivalName: (sec: number) => string;
+  modeQuotaName: (kills: number) => string;
+  objectiveSurviveHint: (sec: number) => string;
+  objectiveQuotaHint: (kills: number) => string;
+  objectiveEradicateHint: string;
+  hudSurviveLabel: string;
+  hudQuotaLabel: string;
+  wonSurvivalSub: (u: string, lvl: string, score: number) => string;
+  wonQuotaSub: (u: string, lvl: string, kills: number) => string;
+  editorObjectiveLabel: string;
+  editorDurationLabel: string;
+  editorTargetKillsLabel: string;
+  storyLeaderboardBtn: string;
+  storyLeaderboardTitle: (lvlId: number, name: string) => string;
+  storyLeaderboardEmpty: string;
+  storyScoreUnit: string;
+  storySelectLevel: string;
+  storySignInToSubmit: string;
+  storyRecordSaved: string;
+  babiesEliminatedShort: string;
+  ratsKilledUnit: string;
+  survivalWonEliminated: string;
+  leaderboardRuleEradication: string;
+  leaderboardRuleQuota: string;
+  leaderboardRuleSurvival: string;
 }
 
 export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
@@ -468,6 +494,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: 'Inserisci un nome di almeno 2 caratteri.',
     editorValidationRats: 'Posiziona almeno 2 ratti sulla mappa.',
     editorValidationFloor: 'Servono più celle di sentiero percorribili.',
+    modeEradicationName: 'Sterminio',
+    modeSurvivalName: (sec) => `Resistenza ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `Quota ${kills} ratti`,
+    objectiveSurviveHint: (sec) => `Resisti ${Math.floor(sec / 60)}m senza raggiungere il limite!`,
+    objectiveQuotaHint: (kills) => `Elimina almeno ${kills} ratti.`,
+    objectiveEradicateHint: 'Elimina il 100% dei ratti.',
+    hudSurviveLabel: 'Resisti',
+    hudQuotaLabel: 'Obiettivo',
+    wonSurvivalSub: (u, lvl, score) => `Resistenza completata, ${u}! Hai difeso "${lvl}" con ${score} pt.`,
+    wonQuotaSub: (u, lvl, kills) => `Quota raggiunta, ${u}! Eliminati ${kills} ratti in "${lvl}".`,
+    editorObjectiveLabel: 'Modalità Obiettivo',
+    editorDurationLabel: 'Durata Sopravvivenza',
+    editorTargetKillsLabel: 'Ratti da Eliminare',
+    storyLeaderboardBtn: 'Classifica Storia',
+    storyLeaderboardTitle: (id, name) => `Classifica Lv.${String(id).padStart(2, '0')} · ${name}`,
+    storyLeaderboardEmpty: 'Nessun punteggio registrato per questa difficoltà. Completa la mappa da loggato!',
+    storyScoreUnit: 'pt',
+    storySelectLevel: 'Livello',
+    storySignInToSubmit: 'Accedi con Google per registrare il risultato nella Classifica Storia',
+    storyRecordSaved: 'Risultato salvato nella Classifica Storia!',
+    babiesEliminatedShort: 'piccoli',
+    ratsKilledUnit: 'ratti',
+    survivalWonEliminated: 'Ratti Eliminati',
+    leaderboardRuleEradication: 'Vince il miglior tempo · A parità di tempo vince chi ha eliminato meno topi',
+    leaderboardRuleQuota: 'Vince il miglior tempo · A parità di tempo vince chi ha eliminato più topi piccoli',
+    leaderboardRuleSurvival: 'Vince chi elimina più ratti nel tempo indicato',
   },
 
   en: {
@@ -721,6 +773,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: 'Enter a map name of at least 2 characters.',
     editorValidationRats: 'Place at least 2 rats on walkable paths.',
     editorValidationFloor: 'More walkable path tiles are needed.',
+    modeEradicationName: 'Eradication',
+    modeSurvivalName: (sec) => `Survival ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `Target ${kills} rats`,
+    objectiveSurviveHint: (sec) => `Survive ${Math.floor(sec / 60)}m without overcrowding!`,
+    objectiveQuotaHint: (kills) => `Eliminate at least ${kills} rats.`,
+    objectiveEradicateHint: 'Eliminate 100% of rats.',
+    hudSurviveLabel: 'Survive',
+    hudQuotaLabel: 'Target',
+    wonSurvivalSub: (u, lvl, score) => `Survival complete, ${u}! You held "${lvl}" with ${score} pts.`,
+    wonQuotaSub: (u, lvl, kills) => `Target reached, ${u}! Eliminated ${kills} rats in "${lvl}".`,
+    editorObjectiveLabel: 'Objective Mode',
+    editorDurationLabel: 'Survival Duration',
+    editorTargetKillsLabel: 'Rats to Eliminate',
+    storyLeaderboardBtn: 'Story Leaderboard',
+    storyLeaderboardTitle: (id, name) => `Leaderboard Lv.${String(id).padStart(2, '0')} · ${name}`,
+    storyLeaderboardEmpty: 'No records saved for this difficulty yet. Clear it while signed in!',
+    storyScoreUnit: 'pts',
+    storySelectLevel: 'Level',
+    storySignInToSubmit: 'Sign in with Google to save your result to the Story Leaderboard',
+    storyRecordSaved: 'Result saved to the Story Leaderboard!',
+    babiesEliminatedShort: 'babies',
+    ratsKilledUnit: 'rats',
+    survivalWonEliminated: 'Rats Eliminated',
+    leaderboardRuleEradication: 'Fastest time wins · Tie-breaker: fewer rats eliminated',
+    leaderboardRuleQuota: 'Fastest time wins · Tie-breaker: more baby rats eliminated',
+    leaderboardRuleSurvival: 'Most rats eliminated within the time limit wins',
   },
 
   de: {
@@ -974,6 +1052,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: 'Gib einen Kartennamen mit mindestens 2 Zeichen ein.',
     editorValidationRats: 'Platziere mindestens 2 Ratten auf Wegen.',
     editorValidationFloor: 'Es werden mehr begehbare Felder benötigt.',
+    modeEradicationName: 'Auslöschung',
+    modeSurvivalName: (sec) => `Überleben ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `Ziel ${kills} Ratten`,
+    objectiveSurviveHint: (sec) => `Überlebe ${Math.floor(sec / 60)} Min. ohne Überfüllung!`,
+    objectiveQuotaHint: (kills) => `Eliminiere mindestens ${kills} Ratten.`,
+    objectiveEradicateHint: 'Eliminiere 100% der Ratten.',
+    hudSurviveLabel: 'Überleben',
+    hudQuotaLabel: 'Ziel',
+    wonSurvivalSub: (u, lvl, score) => `Geschafft, ${u}! Du hast „${lvl}“ mit ${score} Pkt. gehalten.`,
+    wonQuotaSub: (u, lvl, kills) => `Ziel erreicht, ${u}! ${kills} Ratten in „${lvl}“ eliminiert.`,
+    editorObjectiveLabel: 'Spielmodus / Ziel',
+    editorDurationLabel: 'Überlebensdauer',
+    editorTargetKillsLabel: 'Ziel-Eliminierungen',
+    storyLeaderboardBtn: 'Story-Bestenliste',
+    storyLeaderboardTitle: (id, name) => `Bestenliste Lv.${String(id).padStart(2, '0')} · ${name}`,
+    storyLeaderboardEmpty: 'Noch keine Einträge für diese Schwierigkeit. Schließe es angemeldet ab!',
+    storyScoreUnit: 'Pkt',
+    storySelectLevel: 'Level',
+    storySignInToSubmit: 'Mit Google anmelden, um Ergebnis in der Story-Bestenliste zu speichern',
+    storyRecordSaved: 'Ergebnis in der Story-Bestenliste gespeichert!',
+    babiesEliminatedShort: 'Jungtiere',
+    ratsKilledUnit: 'Ratten',
+    survivalWonEliminated: 'Eliminierte Ratten',
+    leaderboardRuleEradication: 'Schnellste Zeit gewinnt · Bei Gleichstand: weniger getötete Ratten',
+    leaderboardRuleQuota: 'Schnellste Zeit gewinnt · Bei Gleichstand: mehr getötete Jungtiere',
+    leaderboardRuleSurvival: 'Meiste eliminierte Ratten im Zeitlimit gewinnen',
   },
 
   es: {
@@ -1227,6 +1331,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: 'Introduce un nombre de al menos 2 caracteres.',
     editorValidationRats: 'Coloca al menos 2 ratas en los caminos.',
     editorValidationFloor: 'Se necesitan más celdas transitables.',
+    modeEradicationName: 'Exterminio',
+    modeSurvivalName: (sec) => `Supervivencia ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `Meta ${kills} ratas`,
+    objectiveSurviveHint: (sec) => `¡Resiste ${Math.floor(sec / 60)} min sin superar el límite!`,
+    objectiveQuotaHint: (kills) => `Elimina al menos ${kills} ratas.`,
+    objectiveEradicateHint: 'Elimina el 100% de las ratas.',
+    hudSurviveLabel: 'Resiste',
+    hudQuotaLabel: 'Meta',
+    wonSurvivalSub: (u, lvl, score) => `¡Supervivencia lograda, ${u}! Defendiste "${lvl}" con ${score} pts.`,
+    wonQuotaSub: (u, lvl, kills) => `¡Meta alcanzada, ${u}! Eliminaste ${kills} ratas en "${lvl}".`,
+    editorObjectiveLabel: 'Modo de Objetivo',
+    editorDurationLabel: 'Duración de Supervivencia',
+    editorTargetKillsLabel: 'Ratas a Eliminar',
+    storyLeaderboardBtn: 'Clasificación Historia',
+    storyLeaderboardTitle: (id, name) => `Clasificación Nv.${String(id).padStart(2, '0')} · ${name}`,
+    storyLeaderboardEmpty: 'Sin récords aún en esta dificultad. ¡Supéralo tras iniciar sesión!',
+    storyScoreUnit: 'pts',
+    storySelectLevel: 'Nivel',
+    storySignInToSubmit: 'Inicia sesión con Google para guardar tu puntuación en la Historia',
+    storyRecordSaved: '¡Resultado guardado en la clasificación de Historia!',
+    babiesEliminatedShort: 'crías',
+    ratsKilledUnit: 'ratas',
+    survivalWonEliminated: 'Ratas Eliminadas',
+    leaderboardRuleEradication: 'Gana el mejor tiempo · Empate: menos ratas eliminadas',
+    leaderboardRuleQuota: 'Gana el mejor tiempo · Empate: más crías eliminadas',
+    leaderboardRuleSurvival: 'Gana quien elimine más ratas en el tiempo indicado',
   },
 
   zh: {
@@ -1480,6 +1610,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: '请输入至少 2 个字的地图名称。',
     editorValidationRats: '请至少在通道上放置 2 只老鼠。',
     editorValidationFloor: '需要更多可行走的通道格。',
+    modeEradicationName: '全灭模式',
+    modeSurvivalName: (sec) => `生存 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `消灭 ${kills} 只`,
+    objectiveSurviveHint: (sec) => `坚持 ${Math.floor(sec / 60)} 分钟不被鼠群淹没！`,
+    objectiveQuotaHint: (kills) => `至少消灭 ${kills} 只老鼠。`,
+    objectiveEradicateHint: '消灭全部老鼠。',
+    hudSurviveLabel: '生存',
+    hudQuotaLabel: '目标',
+    wonSurvivalSub: (u, lvl, score) => `生存成功，${u}！你在“${lvl}”获得 ${score} 分。`,
+    wonQuotaSub: (u, lvl, kills) => `目标达成，${u}！已在“${lvl}”消灭 ${kills} 只老鼠。`,
+    editorObjectiveLabel: '关卡目标模式',
+    editorDurationLabel: '生存时长',
+    editorTargetKillsLabel: '目标消灭数',
+    storyLeaderboardBtn: '剧情排行榜',
+    storyLeaderboardTitle: (id, name) => `第 ${String(id).padStart(2, '0')} 关排行榜 · ${name}`,
+    storyLeaderboardEmpty: '该难度暂无记录，登录 Google 后通关即可上榜！',
+    storyScoreUnit: '分',
+    storySelectLevel: '关卡',
+    storySignInToSubmit: '登录 Google 账号即可上传剧情模式成绩',
+    storyRecordSaved: '成绩已保存至剧情模式排行榜！',
+    babiesEliminatedShort: '幼鼠',
+    ratsKilledUnit: '只鼠',
+    survivalWonEliminated: '消灭鼠数',
+    leaderboardRuleEradication: '用时最短者胜 · 同分时消灭鼠数越少者胜',
+    leaderboardRuleQuota: '用时最短者胜 · 同分时消灭幼鼠越多者胜',
+    leaderboardRuleSurvival: '在规定时间内消灭老鼠最多者胜',
   },
 
   fr: {
@@ -1733,6 +1889,32 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationPack> = {
     editorValidationName: 'Entrez un nom d’au moins 2 caractères.',
     editorValidationRats: 'Placez au moins 2 rats sur la carte.',
     editorValidationFloor: 'Il faut plus de cases praticables.',
+    modeEradicationName: 'Extermination',
+    modeSurvivalName: (sec) => `Survie ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`,
+    modeQuotaName: (kills) => `Quota ${kills} rats`,
+    objectiveSurviveHint: (sec) => `Tenez ${Math.floor(sec / 60)} min sans atteindre la limite !`,
+    objectiveQuotaHint: (kills) => `Éliminez au moins ${kills} rats.`,
+    objectiveEradicateHint: 'Éliminez 100 % des rats.',
+    hudSurviveLabel: 'Tenir',
+    hudQuotaLabel: 'Quota',
+    wonSurvivalSub: (u, lvl, score) => `Survie réussie, ${u} ! Vous avez tenu "${lvl}" (${score} pts).`,
+    wonQuotaSub: (u, lvl, kills) => `Objectif atteint, ${u} ! ${kills} rats éliminés dans "${lvl}".`,
+    editorObjectiveLabel: 'Mode d’Objectif',
+    editorDurationLabel: 'Durée de Survie',
+    editorTargetKillsLabel: 'Rats à Éliminer',
+    storyLeaderboardBtn: 'Classement Histoire',
+    storyLeaderboardTitle: (id, name) => `Classement Nv.${String(id).padStart(2, '0')} · ${name}`,
+    storyLeaderboardEmpty: 'Aucun score enregistré pour cette difficulté. Terminez-le connecté !',
+    storyScoreUnit: 'pts',
+    storySelectLevel: 'Niveau',
+    storySignInToSubmit: 'Connectez-vous avec Google pour enregistrer votre score',
+    storyRecordSaved: 'Score enregistré dans le classement Histoire !',
+    babiesEliminatedShort: 'ratons',
+    ratsKilledUnit: 'rats',
+    survivalWonEliminated: 'Rats Éliminés',
+    leaderboardRuleEradication: 'Meilleur temps gagne · Égalité : moins de rats éliminés',
+    leaderboardRuleQuota: 'Meilleur temps gagne · Égalité : plus de ratons éliminés',
+    leaderboardRuleSurvival: 'Le plus grand nombre de rats éliminés dans le temps imparti gagne',
   },
 };
 

@@ -16,6 +16,8 @@ import {
   HelpCircle,
   Home,
   Lock,
+  LogIn,
+  LogOut,
   Maximize2,
   Pause,
   Play,
@@ -27,6 +29,7 @@ import {
   ShoppingBag,
   Skull,
   Sparkles,
+  Target,
   Trash2,
   Trophy,
   Upload,
@@ -61,11 +64,14 @@ import {
   type BiomeType,
   type CommunityLevelDoc,
   type DifficultyLevel,
+  type GameObjectiveMode,
   type GameSnapshot,
   type LanguageCode,
   type LevelConfig,
   type PlayerProfile,
   type StoreToolType,
+  type StoryLevelSummary,
+  type StoryRunDoc,
   type ToolType,
 } from './game/types';
 import { CommunityHub } from './components/CommunityHub';
@@ -74,8 +80,13 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import {
   fetchCommunityLevelById,
+  fetchStoryLeaderboard,
+  formatCountdownSec,
   formatRunTime,
+  makeStorySummaryKey,
   submitCommunityRun,
+  submitStoryRun,
+  subscribeStoryLevelSummaries,
 } from './services/communityService';
 
 const PROFILE_STORAGE_KEY = 'rats_player_profile_v2';
@@ -240,11 +251,17 @@ function buildInitialSnapshotFromConfig(
     tempWall: lvl.tools.tempWall.max,
     mutagen: lvl.tools.mutagen.max,
   };
+  const objectiveMode: GameObjectiveMode = lvl.objectiveMode ?? 'eradication';
   return {
     levelId: lvl.id,
     levelName: lvl.name,
     biome: lvl.biome,
     difficulty,
+    objectiveMode,
+    targetDurationSec: objectiveMode === 'survival' ? (lvl.targetDurationSec ?? 180) : undefined,
+    targetKills: objectiveMode === 'target_kills' ? (lvl.targetKills ?? 40) : undefined,
+    survivalRemainingSec: objectiveMode === 'survival' ? (lvl.targetDurationSec ?? 180) : undefined,
+    score: 10000,
     isCommunity: lvl.isCommunity,
     communityId: lvl.communityId,
     status: 'playing',
@@ -257,6 +274,7 @@ function buildInitialSnapshotFromConfig(
     totalRats: lvl.initialRats.length,
     criticalLimit: Math.max(30, lvl.criticalLimit + (lvl.isCommunity ? 0 : diff.limitOffset)),
     eliminatedCount: 0,
+    babiesEliminatedCount: 0,
     bornCount: 0,
     elapsedSeconds: 0,
     regenSpeedBonus: 1,
@@ -332,9 +350,29 @@ export default function App() {
     isNewWorldRecord: boolean;
     isNewPersonalBest: boolean;
     recordedTimeMs: number;
+    recordedScore: number;
+    recordedEliminatedCount: number;
     error?: string;
   } | null>(null);
   const [victoryShareCopied, setVictoryShareCopied] = useState(false);
+
+  // Story Mode Leaderboard states (keyed by `${levelId}_${difficulty}`)
+  const [storySummaries, setStorySummaries] = useState<Record<string, StoryLevelSummary>>({});
+  const [storyLeaderboardLvlId, setStoryLeaderboardLvlId] = useState<number | null>(null);
+  const [storyLeaderboardDiff, setStoryLeaderboardDiff] = useState<DifficultyLevel>('normal');
+  const [storyRuns, setStoryRuns] = useState<StoryRunDoc[]>([]);
+  const [storyRunsLoading, setStoryRunsLoading] = useState(false);
+  const [storyRunsError, setStoryRunsError] = useState<string | null>(null);
+  const [storyRunStatus, setStoryRunStatus] = useState<{
+    submitting: boolean;
+    saved: boolean;
+    isNewWorldRecord: boolean;
+    isNewPersonalBest: boolean;
+    recordedTimeMs: number;
+    recordedScore: number;
+    recordedEliminatedCount: number;
+    error?: string;
+  } | null>(null);
 
   // Save manager UI states
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
@@ -351,6 +389,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (screen !== 'menu' && screen !== 'modes') return;
+    const unsub = subscribeStoryLevelSummaries(
+      (map) => setStorySummaries(map),
+      () => {
+        // ignore offline/transient errors
+      },
+    );
+    return () => unsub();
+  }, [screen]);
+
+  useEffect(() => {
     document.documentElement.lang = profile.language;
   }, [profile.language]);
 
@@ -365,6 +414,30 @@ export default function App() {
 
   const handleGoogleSignOut = async () => {
     await signOut(auth);
+  };
+
+  const openStoryLeaderboard = async (lvlId: number, diffOverride?: DifficultyLevel) => {
+    soundEngine.unlock();
+    soundEngine.playUiClick(720);
+    const targetDiff = diffOverride ?? profileRef.current.difficulty;
+    setStoryLeaderboardLvlId(lvlId);
+    setStoryLeaderboardDiff(targetDiff);
+    setStoryRuns([]);
+    setStoryRunsError(null);
+    setStoryRunsLoading(true);
+    const lvlCfg = LEVELS.find((l) => l.id === lvlId);
+    try {
+      const list = await fetchStoryLeaderboard(
+        lvlId,
+        targetDiff,
+        lvlCfg?.objectiveMode ?? 'eradication',
+      );
+      setStoryRuns(list);
+    } catch (e) {
+      setStoryRunsError(e instanceof Error ? e.message : 'Error');
+    } finally {
+      setStoryRunsLoading(false);
+    }
   };
 
   const updateProfile = (updater: (prev: PlayerProfile) => PlayerProfile, stampSave = true) => {
@@ -390,7 +463,9 @@ export default function App() {
   const recordCommunityVictory = async (
     communityId: string,
     elapsedSeconds: number,
+    score: number,
     eliminatedCount: number,
+    babiesEliminatedCount: number,
     bornCount: number,
     user: FirebaseUser,
   ) => {
@@ -400,12 +475,16 @@ export default function App() {
       isNewWorldRecord: false,
       isNewPersonalBest: false,
       recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+      recordedScore: Math.round(score),
+      recordedEliminatedCount: Math.round(eliminatedCount),
     });
     try {
       const res = await submitCommunityRun(
         communityId,
         elapsedSeconds,
+        score,
         eliminatedCount,
+        babiesEliminatedCount,
         bornCount,
         user,
         profileRef.current.username,
@@ -416,6 +495,8 @@ export default function App() {
         isNewWorldRecord: res.isNewWorldRecord,
         isNewPersonalBest: res.isNewPersonalBest,
         recordedTimeMs: res.recordedTimeMs,
+        recordedScore: res.recordedScore,
+        recordedEliminatedCount: res.recordedEliminatedCount,
       });
     } catch (e) {
       setCommunityRunStatus({
@@ -424,6 +505,64 @@ export default function App() {
         isNewWorldRecord: false,
         isNewPersonalBest: false,
         recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+        recordedScore: Math.round(score),
+        recordedEliminatedCount: Math.round(eliminatedCount),
+        error: e instanceof Error ? e.message : 'Error',
+      });
+    }
+  };
+
+  const recordStoryVictory = async (
+    levelId: number,
+    difficulty: DifficultyLevel,
+    objectiveMode: GameObjectiveMode,
+    elapsedSeconds: number,
+    score: number,
+    eliminatedCount: number,
+    babiesEliminatedCount: number,
+    bornCount: number,
+    user: FirebaseUser,
+  ) => {
+    setStoryRunStatus({
+      submitting: true,
+      saved: false,
+      isNewWorldRecord: false,
+      isNewPersonalBest: false,
+      recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+      recordedScore: Math.round(score),
+      recordedEliminatedCount: Math.round(eliminatedCount),
+    });
+    try {
+      const res = await submitStoryRun(
+        levelId,
+        difficulty,
+        objectiveMode,
+        elapsedSeconds,
+        score,
+        eliminatedCount,
+        babiesEliminatedCount,
+        bornCount,
+        user,
+        profileRef.current.username,
+      );
+      setStoryRunStatus({
+        submitting: false,
+        saved: true,
+        isNewWorldRecord: res.isNewWorldRecord,
+        isNewPersonalBest: res.isNewPersonalBest,
+        recordedTimeMs: res.recordedTimeMs,
+        recordedScore: res.recordedScore,
+        recordedEliminatedCount: res.recordedEliminatedCount,
+      });
+    } catch (e) {
+      setStoryRunStatus({
+        submitting: false,
+        saved: false,
+        isNewWorldRecord: false,
+        isNewPersonalBest: false,
+        recordedTimeMs: Math.max(1000, Math.round(elapsedSeconds * 1000)),
+        recordedScore: Math.round(score),
+        recordedEliminatedCount: Math.round(eliminatedCount),
         error: e instanceof Error ? e.message : 'Error',
       });
     }
@@ -436,6 +575,7 @@ export default function App() {
     rewardClaimedRef.current = false;
     setLastWinSummary(null);
     setCommunityRunStatus(null);
+    setStoryRunStatus(null);
     setVictoryShareCopied(false);
 
     const customLevel = communityConfigRef.current;
@@ -463,7 +603,9 @@ export default function App() {
               void recordCommunityVictory(
                 snap.communityId,
                 snap.elapsedSeconds,
+                snap.score,
                 snap.eliminatedCount,
+                snap.babiesEliminatedCount,
                 snap.bornCount,
                 firebaseUserRef.current,
               );
@@ -474,6 +616,8 @@ export default function App() {
                 isNewWorldRecord: false,
                 isNewPersonalBest: false,
                 recordedTimeMs: timeMs,
+                recordedScore: Math.round(snap.score),
+                recordedEliminatedCount: Math.round(snap.eliminatedCount),
               });
             }
             return;
@@ -494,6 +638,31 @@ export default function App() {
               unlockedLevel: computeSequentialUnlocked(nextCompleted),
             };
           });
+
+          const timeMs = Math.max(1000, Math.round(snap.elapsedSeconds * 1000));
+          if (firebaseUserRef.current) {
+            void recordStoryVictory(
+              snap.levelId,
+              snap.difficulty,
+              snap.objectiveMode,
+              snap.elapsedSeconds,
+              snap.score,
+              snap.eliminatedCount,
+              snap.babiesEliminatedCount,
+              snap.bornCount,
+              firebaseUserRef.current,
+            );
+          } else {
+            setStoryRunStatus({
+              submitting: false,
+              saved: false,
+              isNewWorldRecord: false,
+              isNewPersonalBest: false,
+              recordedTimeMs: timeMs,
+              recordedScore: Math.round(snap.score),
+              recordedEliminatedCount: Math.round(snap.eliminatedCount),
+            });
+          }
         }
       },
       (storeTool) => {
@@ -554,6 +723,7 @@ export default function App() {
     soundEngine.unlock();
     soundEngine.playUiClick(740);
     rewardClaimedRef.current = false;
+    setStoryRunStatus(null);
     communityConfigRef.current = null;
     setActiveCommunityConfig(null);
     levelIdxRef.current = idx;
@@ -572,6 +742,7 @@ export default function App() {
     rewardClaimedRef.current = false;
     setLastWinSummary(null);
     setCommunityRunStatus(null);
+    setStoryRunStatus(null);
     setShowEditor(false);
     communityConfigRef.current = cfg;
     setActiveCommunityConfig(cfg);
@@ -593,6 +764,7 @@ export default function App() {
     rewardClaimedRef.current = false;
     setLastWinSummary(null);
     setCommunityRunStatus(null);
+    setStoryRunStatus(null);
     const custom = communityConfigRef.current;
     if (custom) {
       engineRef.current?.loadLevel(custom, custom.creatorDifficulty ?? 'normal', {
@@ -785,6 +957,184 @@ export default function App() {
     understood: t.pwaUnderstood,
     close: t.helpClose,
   };
+
+  const activeStoryLbLevel =
+    storyLeaderboardLvlId !== null
+      ? LEVELS.find((l) => l.id === storyLeaderboardLvlId) ?? LEVELS[0]
+      : null;
+  const activeStoryLbCopy = activeStoryLbLevel
+    ? t.levels[activeStoryLbLevel.id] ?? {
+        name: activeStoryLbLevel.name,
+        subtitle: activeStoryLbLevel.subtitle,
+      }
+    : null;
+  const activeStoryLbMode: GameObjectiveMode =
+    activeStoryLbLevel?.objectiveMode ?? 'eradication';
+
+  const storyLeaderboardModal =
+    storyLeaderboardLvlId !== null && activeStoryLbLevel && activeStoryLbCopy ? (
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4">
+        <div className="w-full max-w-lg max-h-[85dvh] flex flex-col rounded-2xl border border-white/15 bg-slate-950 shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-white/10">
+            <div className="flex items-center gap-2 min-w-0">
+              <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
+              <div className="min-w-0">
+                <h2 className="font-display text-base font-bold text-white truncate">
+                  {t.storyLeaderboardTitle(activeStoryLbLevel.id, activeStoryLbCopy.name)}
+                </h2>
+                <div className="text-[11px] text-slate-400">
+                  {activeStoryLbMode === 'survival'
+                    ? t.modeSurvivalName(activeStoryLbLevel.targetDurationSec ?? 180)
+                    : activeStoryLbMode === 'target_kills'
+                      ? t.modeQuotaName(activeStoryLbLevel.targetKills ?? 40)
+                      : t.modeEradicationName}{' '}
+                  · {t.difficulties[storyLeaderboardDiff].label}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStoryLeaderboardLvlId(null)}
+              className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-white"
+              aria-label={t.helpClose}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="px-5 py-3 border-b border-white/10 bg-slate-900/60 space-y-2.5">
+            <div className="flex items-center gap-3">
+              <label htmlFor="story-lb-level-select" className="text-xs font-semibold text-slate-300 shrink-0">
+                {t.storySelectLevel}:
+              </label>
+              <select
+                id="story-lb-level-select"
+                value={activeStoryLbLevel.id}
+                onChange={(e) => void openStoryLeaderboard(Number(e.target.value), storyLeaderboardDiff)}
+                className="flex-1 min-w-0 rounded-xl border border-white/15 bg-slate-950 px-3 py-2 text-xs font-semibold text-white focus:border-sky-400 focus:outline-none"
+              >
+                {LEVELS.map((l) => {
+                  const lCopy = t.levels[l.id] ?? { name: l.name, subtitle: l.subtitle };
+                  return (
+                    <option key={l.id} value={l.id} className="bg-slate-950 text-white">
+                      Lv.{String(l.id).padStart(2, '0')} · {lCopy.name}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Strictly separated difficulty tabs */}
+            <div className="grid grid-cols-3 gap-1.5">
+              {DIFFICULTY_ORDER.map((diffId) => {
+                const selected = storyLeaderboardDiff === diffId;
+                return (
+                  <button
+                    key={diffId}
+                    type="button"
+                    onClick={() => void openStoryLeaderboard(activeStoryLbLevel.id, diffId)}
+                    className={`min-h-[34px] rounded-lg border text-xs font-bold transition ${
+                      selected
+                        ? diffId === 'easy'
+                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200'
+                          : diffId === 'hard'
+                            ? 'bg-rose-500/25 border-rose-400 text-rose-200'
+                            : 'bg-sky-500/25 border-sky-400 text-sky-200'
+                        : 'bg-slate-950/70 border-white/10 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {t.difficulties[diffId].label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="text-[11px] text-slate-300">
+              {activeStoryLbMode === 'survival'
+                ? t.leaderboardRuleSurvival
+                : activeStoryLbMode === 'target_kills'
+                  ? t.leaderboardRuleQuota
+                  : t.leaderboardRuleEradication}
+            </div>
+          </div>
+
+          <div className="overflow-y-auto p-4 space-y-2">
+            {storyRunsLoading ? (
+              <div className="py-8 text-center text-xs text-slate-400">...</div>
+            ) : storyRunsError ? (
+              <div className="py-6 text-center space-y-2">
+                <div className="text-xs text-rose-300 break-words">{storyRunsError}</div>
+                <button
+                  type="button"
+                  onClick={() => void openStoryLeaderboard(activeStoryLbLevel.id, storyLeaderboardDiff)}
+                  className="min-h-[34px] px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white"
+                >
+                  {t.retryBtn}
+                </button>
+              </div>
+            ) : storyRuns.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-400">
+                {t.storyLeaderboardEmpty}
+              </div>
+            ) : (
+              storyRuns.map((run, idx) => (
+                <div
+                  key={run.runnerId}
+                  className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-xs ${
+                    idx === 0
+                      ? 'border-amber-400/40 bg-amber-500/10'
+                      : idx === 1
+                        ? 'border-slate-300/30 bg-slate-800/70'
+                        : idx === 2
+                          ? 'border-orange-500/30 bg-orange-500/10'
+                          : 'border-white/10 bg-slate-900/70'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono-nums font-bold w-6 text-center text-amber-300 shrink-0">
+                      #{idx + 1}
+                    </span>
+                    <span className="font-semibold text-white truncate">{run.playerName}</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {activeStoryLbMode === 'survival' ? (
+                      <>
+                        <span className="text-[11px] text-slate-400 font-mono-nums">
+                          {run.babiesEliminatedCount} {t.babiesEliminatedShort}
+                        </span>
+                        <span className="font-mono-nums font-bold text-amber-300">
+                          {run.eliminatedCount} {t.ratsKilledUnit}
+                        </span>
+                      </>
+                    ) : activeStoryLbMode === 'target_kills' ? (
+                      <>
+                        <span className="text-[11px] text-emerald-300/85 font-mono-nums">
+                          {run.babiesEliminatedCount} {t.babiesEliminatedShort}
+                        </span>
+                        <span className="font-mono-nums font-bold text-sky-300 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          {formatRunTime(run.timeMs)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[11px] text-slate-400 font-mono-nums">
+                          {run.eliminatedCount} {t.ratsKilledUnit}
+                        </span>
+                        <span className="font-mono-nums font-bold text-sky-300 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          {formatRunTime(run.timeMs)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null;
 
   if (screen === 'welcome') {
     return (
@@ -1129,6 +1479,40 @@ export default function App() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void openStoryLeaderboard(LEVELS[levelIdx]?.id ?? 1, profile.difficulty)}
+                className="min-h-[40px] px-3 flex items-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-xs font-semibold transition"
+              >
+                <Trophy className="w-4 h-4" />
+                <span>{t.storyLeaderboardBtn}</span>
+              </button>
+
+              {firebaseUser ? (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-2.5 min-h-[40px] text-xs">
+                  <span className="text-emerald-200 truncate max-w-[110px]">
+                    <strong>{firebaseUser.displayName || profile.username}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignOut}
+                    className="text-slate-300 hover:text-white flex items-center"
+                    title={t.onlineSignOutBtn}
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  className="min-h-[40px] px-3 flex items-center gap-1.5 rounded-xl bg-white hover:bg-slate-200 text-slate-950 text-xs font-bold transition"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{t.onlineSignInBtn}</span>
+                </button>
+              )}
+
               {/* Language Switcher (IT / EN / DE / ES / ZH / FR) */}
               <label className="min-h-[40px] px-2.5 flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-medium transition cursor-pointer">
                 <Globe className="w-4 h-4 text-sky-400 shrink-0" />
@@ -1154,7 +1538,7 @@ export default function App() {
                 title={t.saveBtnTitle}
               >
                 <Save className="w-4 h-4" />
-                <span>
+                <span className="hidden md:inline">
                   {t.saveBtn(
                     formatSavedTime(profile.lastSavedAt, profile.language, t.autoSaved, t.savedWord),
                   )}
@@ -1370,42 +1754,63 @@ export default function App() {
                           name: lvl.name,
                           subtitle: lvl.subtitle,
                         };
+                        const objMode: GameObjectiveMode = lvl.objectiveMode ?? 'eradication';
+                        const summary = storySummaries[makeStorySummaryKey(lvl.id, profile.difficulty)];
 
                         return (
-                          <button
+                          <div
                             key={lvl.id}
-                            type="button"
-                            disabled={!unlocked}
-                            onClick={() => unlocked && startLevel(idx)}
-                            className={`group flex flex-col justify-between gap-3 rounded-2xl border p-4 text-left transition ${
+                            className={`flex flex-col justify-between gap-2.5 rounded-2xl border p-4 transition ${
                               unlocked
                                 ? 'border-white/10 bg-slate-900/85 hover:bg-slate-800/95 hover:border-sky-400/45'
-                                : 'border-white/5 bg-slate-950/60 opacity-60 cursor-not-allowed'
+                                : 'border-white/5 bg-slate-950/60 opacity-75'
                             }`}
                           >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                            <button
+                              type="button"
+                              disabled={!unlocked}
+                              onClick={() => unlocked && startLevel(idx)}
+                              className="group w-full text-left flex-1 flex flex-col justify-between gap-2.5 disabled:cursor-not-allowed"
+                            >
+                              <div className="min-w-0 w-full">
+                                <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs text-slate-400">
+                                  <div className="flex items-center gap-1.5">
+                                    <span
+                                      className={`font-mono-nums font-bold ${
+                                        unlocked ? 'text-sky-400' : 'text-slate-500'
+                                      }`}
+                                    >
+                                      Lv.{String(lvl.id).padStart(2, '0')}
+                                    </span>
+                                    <span aria-hidden="true">·</span>
+                                    <span className="font-mono-nums">
+                                      {lvl.layout[0].length}×{lvl.layout.length}
+                                    </span>
+                                    {completed && (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    )}
+                                    {!unlocked && (
+                                      <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                    )}
+                                  </div>
                                   <span
-                                    className={`font-mono-nums font-bold ${
-                                      unlocked ? 'text-sky-400' : 'text-slate-500'
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                      objMode === 'survival'
+                                        ? 'bg-amber-500/20 text-amber-300'
+                                        : objMode === 'target_kills'
+                                          ? 'bg-emerald-500/20 text-emerald-300'
+                                          : 'bg-sky-500/15 text-sky-300'
                                     }`}
                                   >
-                                    Lv.{String(lvl.id).padStart(2, '0')}
+                                    {objMode === 'survival'
+                                      ? t.modeSurvivalName(lvl.targetDurationSec ?? 180)
+                                      : objMode === 'target_kills'
+                                        ? t.modeQuotaName(lvl.targetKills ?? 40)
+                                        : t.modeEradicationName}
                                   </span>
-                                  <span aria-hidden="true">·</span>
-                                  <span className="font-mono-nums">
-                                    {lvl.layout[0].length}×{lvl.layout.length}
-                                  </span>
-                                  {completed && (
-                                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                  )}
-                                  {!unlocked && (
-                                    <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                                  )}
                                 </div>
                                 <h3
-                                  className={`mt-1 font-display text-base font-bold transition ${
+                                  className={`mt-1.5 font-display text-base font-bold transition ${
                                     unlocked
                                       ? 'text-white group-hover:text-sky-300'
                                       : 'text-slate-400'
@@ -1417,21 +1822,52 @@ export default function App() {
                                   {unlocked ? lvlCopy.subtitle : t.levelCardLocked(lvl.id - 1)}
                                 </p>
                               </div>
-                            </div>
 
-                            <div className="flex items-center justify-between border-t border-white/5 pt-2.5 text-xs text-slate-400">
-                              <span className="font-mono-nums">
-                                {t.levelCardRatsLimit(lvl.initialRats.length, effLimit)}
-                              </span>
-                              <span
-                                className={`font-mono-nums font-semibold ${
-                                  unlocked ? 'text-amber-400' : 'text-slate-500'
-                                }`}
+                              <div className="flex items-center justify-between w-full pt-1 text-xs text-slate-400">
+                                <span className="font-mono-nums">
+                                  {t.levelCardRatsLimit(lvl.initialRats.length, effLimit)}
+                                </span>
+                                <span
+                                  className={`font-mono-nums font-semibold ${
+                                    unlocked ? 'text-amber-400' : 'text-slate-500'
+                                  }`}
+                                >
+                                  {unlocked ? t.levelCardUpTo(maxReward) : t.locked}
+                                </span>
+                              </div>
+                            </button>
+
+                            <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-[11px]">
+                              <div className="min-w-0 truncate text-slate-400 font-mono-nums">
+                                {summary ? (
+                                  objMode === 'survival' && (summary.bestEliminatedCount > 0 || summary.bestScore > 0) ? (
+                                    <span className="text-amber-300">
+                                      {summary.bestEliminatedCount > 0
+                                        ? `${summary.bestEliminatedCount} ${t.ratsKilledUnit}`
+                                        : `${summary.bestScore} ${t.storyScoreUnit}`}{' '}
+                                      ({summary.bestPlayerName})
+                                    </span>
+                                  ) : summary.bestTimeMs > 0 ? (
+                                    <span className="text-sky-300">
+                                      {formatRunTime(summary.bestTimeMs)} ({summary.bestPlayerName})
+                                    </span>
+                                  ) : (
+                                    <span>{t.onlineNoRecordYet}</span>
+                                  )
+                                ) : (
+                                  <span>{t.onlineNoRecordYet}</span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void openStoryLeaderboard(lvl.id, profile.difficulty)}
+                                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950/90 hover:bg-slate-800 border border-amber-400/25 text-[11px] font-semibold text-amber-300 transition"
                               >
-                                {unlocked ? t.levelCardUpTo(maxReward) : t.locked}
-                              </span>
+                                <Trophy className="w-3 h-3" />
+                                <span>Top 20</span>
+                              </button>
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -1637,6 +2073,7 @@ export default function App() {
             </section>
           )}
         </div>
+        {storyLeaderboardModal}
       </div>
     );
   }
@@ -1730,11 +2167,30 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          {snapshot.isCommunity ? (
-            <span className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-sky-300 whitespace-nowrap">
+          {snapshot.objectiveMode === 'survival' && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-400/35 text-xs font-mono-nums font-bold text-amber-300 whitespace-nowrap">
               <Clock className="w-3.5 h-3.5" />
-              <span>{formatRunTime(Math.round(snapshot.elapsedSeconds * 1000))}</span>
+              <span>
+                {t.hudSurviveLabel}: {formatCountdownSec(snapshot.survivalRemainingSec ?? 0)}
+              </span>
             </span>
+          )}
+          {snapshot.objectiveMode === 'target_kills' && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-400/35 text-xs font-mono-nums font-bold text-emerald-300 whitespace-nowrap">
+              <Target className="w-3.5 h-3.5" />
+              <span>
+                {t.hudQuotaLabel}: {snapshot.eliminatedCount}/{snapshot.targetKills ?? 40}
+              </span>
+            </span>
+          )}
+
+          {snapshot.isCommunity ? (
+            snapshot.objectiveMode !== 'survival' ? (
+              <span className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-sky-300 whitespace-nowrap">
+                <Clock className="w-3.5 h-3.5" />
+                <span>{formatRunTime(Math.round(snapshot.elapsedSeconds * 1000))}</span>
+              </span>
+            ) : null
           ) : (
             <span
               className="flex items-center gap-1 px-1.5 sm:px-2 text-xs font-mono-nums font-semibold text-amber-400 whitespace-nowrap"
@@ -1842,6 +2298,13 @@ export default function App() {
               </div>
               <div className="font-display text-sm font-bold text-white truncate">
                 {levelNameLocalized}
+              </div>
+              <div className="mt-0.5 text-[11px] font-medium text-sky-300/90 truncate">
+                {snapshot.objectiveMode === 'survival'
+                  ? t.objectiveSurviveHint(snapshot.targetDurationSec ?? 180)
+                  : snapshot.objectiveMode === 'target_kills'
+                    ? t.objectiveQuotaHint(snapshot.targetKills ?? 40)
+                    : t.objectiveEradicateHint}
               </div>
             </div>
             {snapshot.regenSpeedBonus > 1.08 && (
@@ -2161,7 +2624,15 @@ export default function App() {
             </h2>
             <p className="mt-1.5 text-sm text-slate-300">
               {snapshot.status === 'won'
-                ? t.wonSub(profile.username, levelNameLocalized)
+                ? snapshot.objectiveMode === 'survival'
+                  ? t.wonSurvivalSub(profile.username, levelNameLocalized, Math.round(snapshot.score))
+                  : snapshot.objectiveMode === 'target_kills'
+                    ? t.wonQuotaSub(
+                        profile.username,
+                        levelNameLocalized,
+                        snapshot.targetKills ?? snapshot.eliminatedCount,
+                      )
+                    : t.wonSub(profile.username, levelNameLocalized)
                 : t.lossOvercrowding(snapshot.criticalLimit)}
             </p>
 
@@ -2191,13 +2662,112 @@ export default function App() {
               </div>
             )}
 
+            {/* Story Mode Official Leaderboard Summary */}
+            {snapshot.status === 'won' && !snapshot.isCommunity && storyRunStatus && (
+              <div className="mt-3 rounded-xl border border-sky-400/35 bg-sky-500/10 px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-sky-200">
+                    {snapshot.objectiveMode === 'survival'
+                      ? `${t.survivalWonEliminated} (${diffLabel})`
+                      : `${t.onlineWonTime} (${diffLabel})`}
+                  </span>
+                  <span className="font-mono-nums text-xl font-bold text-white">
+                    {snapshot.objectiveMode === 'survival'
+                      ? `${storyRunStatus.recordedEliminatedCount} ${t.ratsKilledUnit}`
+                      : formatRunTime(storyRunStatus.recordedTimeMs)}
+                  </span>
+                </div>
+
+                {storyRunStatus.submitting && (
+                  <div className="text-xs text-sky-300">{t.onlineSubmittingRecord}</div>
+                )}
+                {storyRunStatus.saved && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    {storyRunStatus.isNewWorldRecord ? (
+                      <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 font-bold">
+                        {t.onlineNewWorldRecord}
+                      </span>
+                    ) : storyRunStatus.isNewPersonalBest ? (
+                      <span className="px-2 py-0.5 rounded bg-emerald-500 text-slate-950 font-bold">
+                        {t.onlineNewPersonalBest}
+                      </span>
+                    ) : null}
+                    <span className="text-emerald-300">{t.storyRecordSaved}</span>
+                  </div>
+                )}
+                {storyRunStatus.error && (
+                  <div className="rounded-lg border border-rose-500/35 bg-rose-500/15 px-3 py-2 text-xs text-rose-200 flex items-center justify-between gap-2">
+                    <span className="truncate">{storyRunStatus.error}</span>
+                    {firebaseUser && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void recordStoryVictory(
+                            snapshot.levelId,
+                            snapshot.difficulty,
+                            snapshot.objectiveMode,
+                            snapshot.elapsedSeconds,
+                            snapshot.score,
+                            snapshot.eliminatedCount,
+                            snapshot.babiesEliminatedCount,
+                            snapshot.bornCount,
+                            firebaseUser,
+                          )
+                        }
+                        className="shrink-0 px-2 py-1 rounded bg-rose-500 text-white font-bold"
+                      >
+                        {t.retryBtn}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!firebaseUser && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleGoogleSignIn();
+                      if (auth.currentUser) {
+                        await recordStoryVictory(
+                          snapshot.levelId,
+                          snapshot.difficulty,
+                          snapshot.objectiveMode,
+                          snapshot.elapsedSeconds,
+                          snapshot.score,
+                          snapshot.eliminatedCount,
+                          snapshot.babiesEliminatedCount,
+                          snapshot.bornCount,
+                          auth.currentUser,
+                        );
+                      }
+                    }}
+                    className="w-full min-h-[38px] rounded-lg bg-white hover:bg-slate-200 text-slate-950 font-bold text-xs transition"
+                  >
+                    {t.storySignInToSubmit}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => void openStoryLeaderboard(snapshot.levelId, snapshot.difficulty)}
+                  className="w-full min-h-[36px] rounded-lg border border-amber-400/35 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{t.storyLeaderboardBtn} ({diffLabel})</span>
+                </button>
+              </div>
+            )}
+
             {/* Community Online Speedrun Record Summary */}
             {snapshot.status === 'won' && snapshot.isCommunity && communityRunStatus && (
               <div className="mt-3 rounded-xl border border-sky-400/35 bg-sky-500/10 px-4 py-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-sky-200">{t.onlineWonTime}</span>
+                  <span className="text-xs font-semibold text-sky-200">
+                    {snapshot.objectiveMode === 'survival' ? t.survivalWonEliminated : t.onlineWonTime}
+                  </span>
                   <span className="font-mono-nums text-xl font-bold text-white">
-                    {formatRunTime(communityRunStatus.recordedTimeMs)}
+                    {snapshot.objectiveMode === 'survival'
+                      ? `${communityRunStatus.recordedEliminatedCount} ${t.ratsKilledUnit}`
+                      : formatRunTime(communityRunStatus.recordedTimeMs)}
                   </span>
                 </div>
 
@@ -2220,6 +2790,30 @@ export default function App() {
                         <span className="text-emerald-300">{t.onlineRecordSaved}</span>
                       </div>
                     )}
+                    {communityRunStatus.error && (
+                      <div className="rounded-lg border border-rose-500/35 bg-rose-500/15 px-3 py-2 text-xs text-rose-200 flex items-center justify-between gap-2">
+                        <span className="truncate">{communityRunStatus.error}</span>
+                        {firebaseUser && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void recordCommunityVictory(
+                                snapshot.communityId!,
+                                snapshot.elapsedSeconds,
+                                snapshot.score,
+                                snapshot.eliminatedCount,
+                                snapshot.babiesEliminatedCount,
+                                snapshot.bornCount,
+                                firebaseUser,
+                              )
+                            }
+                            className="shrink-0 px-2 py-1 rounded bg-rose-500 text-white font-bold"
+                          >
+                            {t.retryBtn}
+                          </button>
+                        )}
+                      </div>
+                    )}
                     {!firebaseUser && (
                       <button
                         type="button"
@@ -2229,7 +2823,9 @@ export default function App() {
                             await recordCommunityVictory(
                               snapshot.communityId,
                               snapshot.elapsedSeconds,
+                              snapshot.score,
                               snapshot.eliminatedCount,
+                              snapshot.babiesEliminatedCount,
                               snapshot.bornCount,
                               auth.currentUser,
                             );
@@ -2251,6 +2847,11 @@ export default function App() {
                 <div className="font-mono-nums text-lg font-bold text-emerald-400">
                   {snapshot.eliminatedCount}
                 </div>
+                {snapshot.babiesEliminatedCount > 0 && (
+                  <div className="text-[10px] font-mono-nums text-emerald-300/75">
+                    {snapshot.babiesEliminatedCount} {t.babiesEliminatedShort}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-[11px] text-slate-400">{t.statBorn}</div>
@@ -2364,6 +2965,7 @@ export default function App() {
           </div>
         </div>
       )}
+      {storyLeaderboardModal}
     </div>
   );
 }

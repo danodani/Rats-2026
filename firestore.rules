@@ -11,6 +11,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidStorySummaryId(id) {
+      return id is string && id.size() >= 6 && id.size() <= 10 && id.matches('^([1-9]|[12][0-9]|30)_(easy|normal|hard)$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -39,6 +43,10 @@ service cloud.firestore {
       return d is string && d.size() <= 10 && d in ['easy', 'normal', 'hard'];
     }
 
+    function isValidObjectiveMode(m) {
+      return m is string && m.size() <= 16 && m in ['eradication', 'survival', 'target_kills'];
+    }
+
     function isValidCommunityLevel(data) {
       return data.title is string
         && data.title.size() >= 2
@@ -56,6 +64,9 @@ service cloud.firestore {
         && isValidHexOrEmpty(data.customWallColor)
         && isValidHexOrEmpty(data.customFloorColor)
         && isValidDifficulty(data.difficulty)
+        && (!('objectiveMode' in data) || isValidObjectiveMode(data.objectiveMode))
+        && (!('targetDurationSec' in data) || (data.targetDurationSec is int && data.targetDurationSec >= 60 && data.targetDurationSec <= 600))
+        && (!('targetKills' in data) || (data.targetKills is int && data.targetKills >= 10 && data.targetKills <= 500))
         && data.criticalLimit is int
         && data.criticalLimit >= 30
         && data.criticalLimit <= 250
@@ -85,6 +96,9 @@ service cloud.firestore {
         && data.bestTimeMs is int
         && data.bestTimeMs >= 0
         && data.bestTimeMs <= 36000000
+        && (!('bestScore' in data) || (data.bestScore is int && data.bestScore >= 0 && data.bestScore <= 1000000))
+        && (!('bestEliminatedCount' in data) || (data.bestEliminatedCount is int && data.bestEliminatedCount >= 0 && data.bestEliminatedCount <= 10000))
+        && (!('bestBabiesEliminatedCount' in data) || (data.bestBabiesEliminatedCount is int && data.bestBabiesEliminatedCount >= 0 && data.bestBabiesEliminatedCount <= 10000))
         && data.bestPlayerName is string
         && data.bestPlayerName.size() <= 24
         && data.playCount is int
@@ -104,6 +118,9 @@ service cloud.firestore {
         'customWallColor',
         'customFloorColor',
         'difficulty',
+        'objectiveMode',
+        'targetDurationSec',
+        'targetKills',
         'criticalLimit',
         'ratSpeed',
         'breedCooldown',
@@ -112,6 +129,9 @@ service cloud.firestore {
         'initialRats',
         'isPublished',
         'bestTimeMs',
+        'bestScore',
+        'bestEliminatedCount',
+        'bestBabiesEliminatedCount',
         'bestPlayerName',
         'playCount',
         'createdAt',
@@ -135,9 +155,11 @@ service cloud.firestore {
         && data.timeMs is int
         && data.timeMs >= 1000
         && data.timeMs <= 36000000
+        && (!('score' in data) || (data.score is int && data.score >= 0 && data.score <= 1000000))
         && data.eliminatedCount is int
         && data.eliminatedCount >= 0
         && data.eliminatedCount <= 10000
+        && (!('babiesEliminatedCount' in data) || (data.babiesEliminatedCount is int && data.babiesEliminatedCount >= 0 && data.babiesEliminatedCount <= 10000))
         && data.bornCount is int
         && data.bornCount >= 0
         && data.bornCount <= 10000
@@ -153,7 +175,108 @@ service cloud.firestore {
         'runnerId',
         'playerName',
         'timeMs',
+        'score',
         'eliminatedCount',
+        'babiesEliminatedCount',
+        'bornCount',
+        'isPublic',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(allowed) && data.keys().hasOnly(allowed);
+    }
+
+    function isValidStorySummary(data) {
+      return data.levelId is int
+        && data.levelId >= 1
+        && data.levelId <= 30
+        && isValidDifficulty(data.difficulty)
+        && data.isPublic is bool
+        && data.isPublic == true
+        && data.bestTimeMs is int
+        && data.bestTimeMs >= 1000
+        && data.bestTimeMs <= 36000000
+        && data.bestScore is int
+        && data.bestScore >= 0
+        && data.bestScore <= 1000000
+        && data.bestEliminatedCount is int
+        && data.bestEliminatedCount >= 0
+        && data.bestEliminatedCount <= 10000
+        && data.bestBabiesEliminatedCount is int
+        && data.bestBabiesEliminatedCount >= 0
+        && data.bestBabiesEliminatedCount <= 10000
+        && data.bestPlayerName is string
+        && data.bestPlayerName.size() >= 1
+        && data.bestPlayerName.size() <= 24
+        && data.playCount is int
+        && data.playCount >= 1
+        && data.playCount <= 10000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasExactStorySummaryKeys(data) {
+      let allowed = [
+        'levelId',
+        'difficulty',
+        'isPublic',
+        'bestTimeMs',
+        'bestScore',
+        'bestEliminatedCount',
+        'bestBabiesEliminatedCount',
+        'bestPlayerName',
+        'playCount',
+        'createdAt',
+        'updatedAt'
+      ];
+      return data.keys().hasAll(allowed) && data.keys().hasOnly(allowed);
+    }
+
+    function isValidStoryRun(data) {
+      return data.levelId is int
+        && data.levelId >= 1
+        && data.levelId <= 30
+        && data.runnerId is string
+        && data.runnerId == request.auth.uid
+        && data.runnerId.size() <= 128
+        && data.runnerId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.playerName is string
+        && data.playerName.size() >= 1
+        && data.playerName.size() <= 24
+        && isValidDifficulty(data.difficulty)
+        && isValidObjectiveMode(data.objectiveMode)
+        && data.timeMs is int
+        && data.timeMs >= 1000
+        && data.timeMs <= 36000000
+        && data.score is int
+        && data.score >= 0
+        && data.score <= 1000000
+        && data.eliminatedCount is int
+        && data.eliminatedCount >= 0
+        && data.eliminatedCount <= 10000
+        && data.babiesEliminatedCount is int
+        && data.babiesEliminatedCount >= 0
+        && data.babiesEliminatedCount <= 10000
+        && data.bornCount is int
+        && data.bornCount >= 0
+        && data.bornCount <= 10000
+        && data.isPublic is bool
+        && data.isPublic == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasExactStoryRunKeys(data) {
+      let allowed = [
+        'levelId',
+        'runnerId',
+        'playerName',
+        'difficulty',
+        'objectiveMode',
+        'timeMs',
+        'score',
+        'eliminatedCount',
+        'babiesEliminatedCount',
         'bornCount',
         'isPublic',
         'createdAt',
@@ -164,7 +287,7 @@ service cloud.firestore {
 
     match /community_levels/{levelId} {
       allow get: if isValidId(levelId)
-        && (existing().isPublished == true || (isSignedIn() && existing().authorId == request.auth.uid));
+        && (resource == null || existing().isPublished == true || (isSignedIn() && existing().authorId == request.auth.uid));
 
       allow list: if existing().isPublished == true
         || (isSignedIn() && existing().authorId == request.auth.uid);
@@ -175,6 +298,9 @@ service cloud.firestore {
         && hasExactLevelKeys(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().bestTimeMs == 0
+        && incoming().bestScore == 0
+        && incoming().bestEliminatedCount == 0
+        && incoming().bestBabiesEliminatedCount == 0
         && incoming().bestPlayerName == ''
         && incoming().playCount == 0
         && incoming().createdAt == request.time
@@ -196,6 +322,9 @@ service cloud.firestore {
               'customWallColor',
               'customFloorColor',
               'difficulty',
+              'objectiveMode',
+              'targetDurationSec',
+              'targetKills',
               'criticalLimit',
               'ratSpeed',
               'breedCooldown',
@@ -211,16 +340,51 @@ service cloud.firestore {
             && incoming().isPublished == true
             && incoming().playCount == existing().playCount + 1
             && (
-              (incoming().bestTimeMs == existing().bestTimeMs && incoming().bestPlayerName == existing().bestPlayerName)
+              (
+                incoming().bestTimeMs == existing().bestTimeMs
+                && ('bestScore' in existing() ? incoming().bestScore == existing().bestScore : incoming().bestScore == 0)
+                && ('bestEliminatedCount' in existing() ? incoming().bestEliminatedCount == existing().bestEliminatedCount : incoming().bestEliminatedCount == 0)
+                && ('bestBabiesEliminatedCount' in existing() ? incoming().bestBabiesEliminatedCount == existing().bestBabiesEliminatedCount : incoming().bestBabiesEliminatedCount == 0)
+                && incoming().bestPlayerName == existing().bestPlayerName
+              )
               || (
-                (existing().bestTimeMs == 0 || incoming().bestTimeMs < existing().bestTimeMs)
-                && incoming().bestTimeMs >= 1000
+                (
+                  (('objectiveMode' in existing()) && existing().objectiveMode == 'survival')
+                    ? (
+                        (
+                          !('bestEliminatedCount' in existing())
+                          || existing().bestEliminatedCount == 0
+                          || incoming().bestEliminatedCount > existing().bestEliminatedCount
+                          || (incoming().bestEliminatedCount == existing().bestEliminatedCount && (!('bestBabiesEliminatedCount' in existing()) || incoming().bestBabiesEliminatedCount > existing().bestBabiesEliminatedCount || incoming().bestScore > existing().bestScore))
+                        )
+                        && incoming().bestTimeMs >= 1000
+                      )
+                    : (
+                        (
+                          existing().bestTimeMs == 0
+                          || incoming().bestTimeMs < existing().bestTimeMs
+                          || (
+                            incoming().bestTimeMs - existing().bestTimeMs < 100
+                            && existing().bestTimeMs - incoming().bestTimeMs < 100
+                            && (
+                              !('bestEliminatedCount' in existing())
+                              || incoming().bestEliminatedCount < existing().bestEliminatedCount
+                              || (!('bestBabiesEliminatedCount' in existing()) || incoming().bestBabiesEliminatedCount > existing().bestBabiesEliminatedCount)
+                            )
+                          )
+                        )
+                        && incoming().bestTimeMs >= 1000
+                      )
+                )
                 && incoming().bestPlayerName.size() >= 1
               )
             )
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'playCount',
               'bestTimeMs',
+              'bestScore',
+              'bestEliminatedCount',
+              'bestBabiesEliminatedCount',
               'bestPlayerName',
               'updatedAt'
             ])
@@ -236,7 +400,7 @@ service cloud.firestore {
       match /runs/{runnerId} {
         allow get: if isValidId(levelId)
           && isValidId(runnerId)
-          && existing().isPublic == true;
+          && (resource == null || existing().isPublic == true);
 
         allow list: if existing().isPublic == true;
 
@@ -262,11 +426,20 @@ service cloud.firestore {
           && incoming().runnerId == existing().runnerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().timeMs <= existing().timeMs
+          && (
+            !('score' in existing())
+            || !('babiesEliminatedCount' in existing())
+            || incoming().timeMs <= existing().timeMs
+            || incoming().score >= existing().score
+            || incoming().eliminatedCount >= existing().eliminatedCount
+            || incoming().babiesEliminatedCount >= existing().babiesEliminatedCount
+          )
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'playerName',
             'timeMs',
+            'score',
             'eliminatedCount',
+            'babiesEliminatedCount',
             'bornCount',
             'updatedAt'
           ])
@@ -275,6 +448,126 @@ service cloud.firestore {
 
         allow delete: if isVerifiedUser()
           && isValidId(levelId)
+          && isValidId(runnerId)
+          && existing().runnerId == request.auth.uid;
+      }
+    }
+
+    match /story_levels/{summaryId} {
+      allow get: if isValidStorySummaryId(summaryId) && (resource == null || existing().isPublic == true);
+
+      allow list: if existing().isPublic == true;
+
+      allow create: if isVerifiedUser()
+        && isValidStorySummaryId(summaryId)
+        && isValidStorySummary(incoming())
+        && hasExactStorySummaryKeys(incoming())
+        && string(incoming().levelId) + '_' + incoming().difficulty == summaryId
+        && incoming().playCount == 1
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/story_levels/$(summaryId)/runs/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/story_levels/$(summaryId)/runs/$(request.auth.uid)).data.runnerId == request.auth.uid;
+
+      allow update: if isVerifiedUser()
+        && isValidStorySummaryId(summaryId)
+        && isValidStorySummary(incoming())
+        && incoming().levelId == existing().levelId
+        && incoming().difficulty == existing().difficulty
+        && incoming().isPublic == existing().isPublic
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().playCount == existing().playCount + 1
+        && (
+          (
+            incoming().bestTimeMs == existing().bestTimeMs
+            && incoming().bestScore == existing().bestScore
+            && incoming().bestEliminatedCount == existing().bestEliminatedCount
+            && incoming().bestBabiesEliminatedCount == existing().bestBabiesEliminatedCount
+            && incoming().bestPlayerName == existing().bestPlayerName
+          )
+          || (
+            (
+              incoming().bestTimeMs < existing().bestTimeMs
+              || incoming().bestScore > existing().bestScore
+              || incoming().bestEliminatedCount > existing().bestEliminatedCount
+              || (
+                incoming().bestTimeMs - existing().bestTimeMs < 100
+                && existing().bestTimeMs - incoming().bestTimeMs < 100
+                && (
+                  incoming().bestEliminatedCount < existing().bestEliminatedCount
+                  || incoming().bestBabiesEliminatedCount > existing().bestBabiesEliminatedCount
+                )
+              )
+            )
+            && incoming().bestPlayerName.size() >= 1
+          )
+        )
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'playCount',
+          'bestTimeMs',
+          'bestScore',
+          'bestEliminatedCount',
+          'bestBabiesEliminatedCount',
+          'bestPlayerName',
+          'updatedAt'
+        ])
+        && existsAfter(/databases/$(database)/documents/story_levels/$(summaryId)/runs/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/story_levels/$(summaryId)/runs/$(request.auth.uid)).data.runnerId == request.auth.uid;
+
+      allow delete: if false;
+
+      match /runs/{runnerId} {
+        allow get: if isValidStorySummaryId(summaryId)
+          && isValidId(runnerId)
+          && (resource == null || existing().isPublic == true);
+
+        allow list: if existing().isPublic == true;
+
+        allow create: if isVerifiedUser()
+          && isValidStorySummaryId(summaryId)
+          && isValidId(runnerId)
+          && runnerId == request.auth.uid
+          && isValidStoryRun(incoming())
+          && hasExactStoryRunKeys(incoming())
+          && string(incoming().levelId) + '_' + incoming().difficulty == summaryId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/story_levels/$(summaryId));
+
+        allow update: if isVerifiedUser()
+          && isValidStorySummaryId(summaryId)
+          && isValidId(runnerId)
+          && runnerId == request.auth.uid
+          && existing().runnerId == request.auth.uid
+          && isValidStoryRun(incoming())
+          && incoming().levelId == existing().levelId
+          && incoming().runnerId == existing().runnerId
+          && incoming().difficulty == existing().difficulty
+          && incoming().objectiveMode == existing().objectiveMode
+          && incoming().isPublic == existing().isPublic
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().timeMs <= existing().timeMs
+            || incoming().score >= existing().score
+            || incoming().eliminatedCount >= existing().eliminatedCount
+            || incoming().babiesEliminatedCount >= existing().babiesEliminatedCount
+          )
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'playerName',
+            'difficulty',
+            'timeMs',
+            'score',
+            'eliminatedCount',
+            'babiesEliminatedCount',
+            'bornCount',
+            'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/story_levels/$(summaryId));
+
+        allow delete: if isVerifiedUser()
+          && isValidStorySummaryId(summaryId)
           && isValidId(runnerId)
           && existing().runnerId == request.auth.uid;
       }

@@ -20,6 +20,7 @@ import {
   TOOLS_META,
   type BaseToolType,
   type DifficultyLevel,
+  type GameObjectiveMode,
   type GameSnapshot,
   type GameStatus,
   type LevelConfig,
@@ -239,6 +240,7 @@ export class RatsGameEngine {
   private speedMultiplier: 1 | 2 = 1;
   private elapsedSeconds = 0;
   private eliminatedCount = 0;
+  private babiesEliminatedCount = 0;
   private bornCount = 0;
   private lossReason = '';
   private shakeIntensity = 0;
@@ -641,6 +643,7 @@ export class RatsGameEngine {
     this.status = 'playing';
     this.elapsedSeconds = 0;
     this.eliminatedCount = 0;
+    this.babiesEliminatedCount = 0;
     this.bornCount = 0;
     this.lossReason = '';
     this.shakeIntensity = 0;
@@ -1584,8 +1587,41 @@ export class RatsGameEngine {
     if (rat.dyingTimer > 0) return;
     rat.dyingTimer = 0.34;
     this.eliminatedCount += 1;
+    if (rat.isBaby) {
+      this.babiesEliminatedCount += 1;
+    }
     const { x, z } = this.gridToWorld(rat.x, rat.z);
     this.spawnBurst(x, 0.24, z, particleColor, 10, 2.0);
+  }
+
+  private spawnReinforcementWave(count = 3): void {
+    const safeCells: Array<{ c: number; r: number }> = [];
+    const fallbackCells: Array<{ c: number; r: number }> = [];
+
+    for (let r = 1; r < this.rows - 1; r++) {
+      for (let c = 1; c < this.cols - 1; c++) {
+        if (!this.isWalkable(c, r)) continue;
+        fallbackCells.push({ c, r });
+        const hasProp = this.props.some((p) => p.col === c && p.row === r);
+        const hasHazard = this.hazards.some((h) => h.col === c && h.row === r);
+        if (!hasProp && !hasHazard) {
+          safeCells.push({ c, r });
+        }
+      }
+    }
+
+    const pool = safeCells.length > 0 ? safeCells : fallbackCells;
+    if (pool.length === 0) return;
+
+    const sexes: RatSex[] = ['M', 'F', Math.random() < 0.5 ? 'M' : 'F'];
+    for (let i = 0; i < count; i++) {
+      const picked = pool[Math.floor(Math.random() * pool.length)];
+      const sex = sexes[i % sexes.length];
+      this.spawnRat(picked.c, picked.r, sex, false, false, true);
+      const { x, z } = this.gridToWorld(picked.c, picked.r);
+      this.spawnBurst(x, 0.28, z, sex === 'M' ? 0x38bdf8 : 0xf472b6, 7, 1.4);
+    }
+    soundEngine.play('birth', 180, 0.52);
   }
 
   private spawnBurst(
@@ -1693,7 +1729,39 @@ export class RatsGameEngine {
     return Math.min(2.25, 1 + this.elapsedSeconds / 68);
   }
 
+  private getObjectiveMode(): GameObjectiveMode {
+    return this.level?.objectiveMode ?? 'eradication';
+  }
+
+  private getTargetDurationSec(): number {
+    return Math.max(30, this.level?.targetDurationSec ?? 180);
+  }
+
+  private getTargetKills(): number {
+    return Math.max(10, this.level?.targetKills ?? 40);
+  }
+
+  private computeRunScore(remainingRats: number): number {
+    const mode = this.getObjectiveMode();
+    if (mode === 'survival') {
+      const targetDur = this.getTargetDurationSec();
+      const earlyClear = remainingRats === 0 && this.elapsedSeconds < targetDur;
+      const earlyBonus = earlyClear ? Math.round((targetDur - this.elapsedSeconds) * 10) : 0;
+      return Math.max(
+        100,
+        10000 +
+          earlyBonus +
+          this.eliminatedCount * 25 +
+          Math.max(0, this.effectiveCriticalLimit - remainingRats) * 15,
+      );
+    }
+    return Math.max(100, Math.round(10000 - this.elapsedSeconds * 20) + this.eliminatedCount * 10);
+  }
+
   private getCurrentRewardCredits(): number {
+    if (this.getObjectiveMode() === 'survival') {
+      return this.baseRewardCredits;
+    }
     // Full reward during first 25s; then decays smoothly down to a 25% minimum floor
     const graceSec = 25;
     const penalty = Math.floor(Math.max(0, this.elapsedSeconds - graceSec) * (this.baseRewardCredits / 180));
@@ -2131,10 +2199,30 @@ export class RatsGameEngine {
     const total = activeRats.length;
     soundEngine.setDangerIntensity(total / this.effectiveCriticalLimit);
 
-    if (total === 0 && this.rats.length === 0) {
-      this.status = 'won';
+    if (total >= this.effectiveCriticalLimit) {
+      this.status = 'lost';
+      this.lossReason = `Sovraffollamento! I ratti hanno raggiunto il limite critico di ${this.effectiveCriticalLimit}.`;
       soundEngine.setDangerIntensity(0);
       soundEngine.play('wewin', 0, 0.85);
+      this.emitSnapshot();
+      return;
+    }
+
+    const mode = this.getObjectiveMode();
+    const targetDur = this.getTargetDurationSec();
+    const targetKills = this.getTargetKills();
+
+    const wonByWipeout = mode === 'eradication' && total === 0 && this.rats.length === 0;
+    const wonBySurvival = mode === 'survival' && this.elapsedSeconds >= targetDur;
+    const wonByQuota = mode === 'target_kills' && this.eliminatedCount >= targetKills;
+
+    if (wonByWipeout || wonBySurvival || wonByQuota) {
+      if (wonBySurvival && this.elapsedSeconds > targetDur) {
+        this.elapsedSeconds = targetDur;
+      }
+      this.status = 'won';
+      soundEngine.setDangerIntensity(0);
+      soundEngine.play('welldone', 0, 0.85);
       window.setTimeout(() => {
         if (!this.disposed && this.status === 'won') {
           soundEngine.play('victory', 0, 0.85);
@@ -2144,13 +2232,9 @@ export class RatsGameEngine {
       return;
     }
 
-    if (total >= this.effectiveCriticalLimit) {
-      this.status = 'lost';
-      this.lossReason = `Sovraffollamento! I ratti hanno raggiunto il limite critico di ${this.effectiveCriticalLimit}.`;
-      soundEngine.setDangerIntensity(0);
-      soundEngine.play('welldone', 0, 0.72);
-      this.emitSnapshot();
-      return;
+    // Automatic reinforcement wave: in survival or target_kills, keep active population supplied
+    if ((mode === 'survival' || mode === 'target_kills') && total < 3) {
+      this.spawnReinforcementWave(3);
     }
 
     this.snapshotTimer += dt;
@@ -2317,11 +2401,23 @@ export class RatsGameEngine {
       }
     }
 
+    const objectiveMode = this.getObjectiveMode();
+    const targetDurationSec = this.getTargetDurationSec();
+    const targetKills = this.getTargetKills();
+    const totalRats = males + females + babies;
+    const survivalRemainingSec =
+      objectiveMode === 'survival' ? Math.max(0, targetDurationSec - this.elapsedSeconds) : undefined;
+
     this.onSnapshot({
       levelId: this.level.id,
       levelName: this.level.name,
       biome: this.level.biome,
       difficulty: this.difficulty,
+      objectiveMode,
+      targetDurationSec: objectiveMode === 'survival' ? targetDurationSec : undefined,
+      targetKills: objectiveMode === 'target_kills' ? targetKills : undefined,
+      survivalRemainingSec,
+      score: this.computeRunScore(totalRats),
       isCommunity: this.level.isCommunity,
       communityId: this.level.communityId,
       status: this.status,
@@ -2331,9 +2427,10 @@ export class RatsGameEngine {
       pregnant,
       sterile,
       infected,
-      totalRats: males + females + babies,
+      totalRats,
       criticalLimit: this.effectiveCriticalLimit,
       eliminatedCount: this.eliminatedCount,
+      babiesEliminatedCount: this.babiesEliminatedCount,
       bornCount: this.bornCount,
       elapsedSeconds: this.elapsedSeconds,
       regenSpeedBonus: this.getRegenSpeedMultiplier(),
